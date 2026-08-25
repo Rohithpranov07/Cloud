@@ -13,3 +13,5 @@ PyYAML==6.0.3
 # Dev tooling required by the CLAUDE.md quality gates (`mypy src/` clean).
 # Formally added to the stack at T8.1; pinned here so the gate is runnable from T0.1 on.
 mypy==2.3.1
+types-PyYAML==6.0.12.20260815
+pandas-stubs==3.0.5.260730
