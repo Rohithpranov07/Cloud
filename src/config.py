@@ -76,3 +76,6 @@ UNIT_COST_PER_MIN: dict[str, float] = dict(_CONFIG["unit_cost_per_min"])
 
 # --- TRD §1.3 defaults ----------------------------------------------------------
 TRACE_DEFAULTS: dict[str, Any] = dict(_CONFIG["trace"])
+
+# --- Evaluation run parameters (T7.1) -------------------------------------------
+EVALUATION_DEFAULTS: dict[str, Any] = dict(_CONFIG["evaluation"])

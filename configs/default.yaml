@@ -67,3 +67,19 @@ unit_cost_per_min:
   sagemaker_endpoint: 0.05
   eks_gpu_reserved: 0.09
   eks_gpu_spot: 0.04
+
+# ---------------------------------------------------------------------------
+# Evaluation run parameters (T7.1). The forecast horizon and the baseline's
+# per-unit capacity come from the TRD §2 signature defaults.
+# ---------------------------------------------------------------------------
+evaluation:
+  start_minute: 10              # warm-up: the forecaster needs history before it is asked
+  forecast_horizon: 5           # TRD §2 default
+  baseline_per_unit_capacity: 20  # TRD §2 default for baseline_scaling_decision
+  recalibrate_every_minutes: 20 # T7.1: re-fit the classifier on this cadence
+  # Budget for the whole simulated window, against which END-OF-WINDOW spend is checked.
+  # Chosen the way a tenant would set one, not to manufacture a result: the pre-shift
+  # steady-state run rate is 0.20/min over the 110 simulated minutes = 22.20, so this is
+  # that run rate plus ~8% headroom. A workload that never changes composition stays
+  # comfortably inside it; the compositional shift is what pushes it over.
+  budget: 24.0
