@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# Generated artifacts land in data/ at runtime; keep the directory, not its contents.
+data/*.csv
+data/*.png
+!data/.gitkeep

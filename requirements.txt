@@ -1,0 +1,15 @@
+# Pinned stack — TRD.md §4.
+# Versions are the exact ones resolved and verified on Python 3.14.7 (macOS/arm64)
+# during task T0.1. Do not bump without saying so explicitly (Anti-Hallucination rule 2).
+numpy==2.5.2
+pandas==3.0.5
+scipy==1.18.1
+matplotlib==3.11.1
+scikit-learn==1.9.0
+statsmodels==0.14.6
+pytest==9.1.1
+PyYAML==6.0.3
+
+# Dev tooling required by the CLAUDE.md quality gates (`mypy src/` clean).
+# Formally added to the stack at T8.1; pinned here so the gate is runnable from T0.1 on.
+mypy==2.3.1
