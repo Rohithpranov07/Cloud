@@ -219,7 +219,8 @@ def test_nfr1_all_third_party_imports_are_pinned_in_requirements() -> None:
     }
     distribution_names = {"yaml": "pyyaml", "sklearn": "scikit-learn"}
     standard_library = {
-        "__future__", "ast", "dataclasses", "math", "pathlib", "re", "typing", "warnings",
+        "__future__", "ast", "collections", "dataclasses", "heapq", "math", "pathlib",
+        "re", "typing", "warnings",
     }
 
     for path in SOURCE_FILES:

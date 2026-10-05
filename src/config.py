@@ -67,6 +67,12 @@ def _validate(cfg: dict[str, Any], config_path: Path) -> None:
     if sizing_rule not in ("round", "ceil"):
         raise ValueError(f"{config_path}: evaluation.sizing_rule must be 'round' or 'ceil', got {sizing_rule!r}")
 
+    latency: dict[str, Any] = cfg["latency"]
+    if set(latency["sla_multiplier"]) != set(archetypes):
+        raise ValueError(f"{config_path}: latency.sla_multiplier keys must be exactly the archetypes")
+    if int(latency["slots_per_unit"]) < 2:
+        raise ValueError(f"{config_path}: latency.slots_per_unit must be >= 2, got {latency['slots_per_unit']}")
+
 
 _CONFIG: dict[str, Any] = load_config()
 
@@ -83,3 +89,6 @@ TRACE_DEFAULTS: dict[str, Any] = dict(_CONFIG["trace"])
 
 # --- Evaluation run parameters (T7.1) -------------------------------------------
 EVALUATION_DEFAULTS: dict[str, Any] = dict(_CONFIG["evaluation"])
+
+# --- Latency model parameters (T10.2, Addendum §9.2) -----------------------------
+LATENCY_DEFAULTS: dict[str, Any] = dict(_CONFIG["latency"])

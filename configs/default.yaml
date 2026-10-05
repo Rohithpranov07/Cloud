@@ -84,3 +84,17 @@ evaluation:
   # that run rate plus ~8% headroom. A workload that never changes composition stays
   # comfortably inside it; the compositional shift is what pushes it over.
   budget: 24.0
+
+# ---------------------------------------------------------------------------
+# Latency model (T10.2) — Addendum §9.1/§9.2. Keys fixed; values tunable.
+# ---------------------------------------------------------------------------
+latency:
+  slots_per_unit: 2
+  arrival_seed: 7
+  initial_units_baseline: 1
+  initial_units_aware_per_primitive: 1
+  sla_multiplier:
+    short_conversational: 3
+    long_context_rag: 3
+    agentic_tool_using: 3
+    batch_offline: 10
