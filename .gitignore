@@ -9,3 +9,4 @@ __pycache__/
 data/*.csv
 data/*.png
 !data/.gitkeep
+!tests/golden/evaluation_results_round.csv

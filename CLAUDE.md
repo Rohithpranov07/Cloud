@@ -113,3 +113,40 @@ Fixed archetype enum (`TRD.md` §1.1):
 ```python
 ARCHETYPES = ["short_conversational", "long_context_rag", "agentic_tool_using", "batch_offline"]
 ```
+
+## PART 2 ADDITIONS (Phases 10–14) — READ EVERY SESSION
+
+### Ground truth, extended
+- `TRD-AWS-Addendum.md` §8–§14 is FIXED for Part 2 work exactly as `TRD.md` is for Part 1.
+- New package boundary: `cloud/` may import from `src/`; `src/` must NEVER import
+  `cloud/`, `boto3`, or anything AWS. `tests/cloud/` tests `cloud/` only.
+- Default behaviour of every Part 1 function is frozen. Part 2 may add keyword-only
+  parameters whose defaults reproduce Part 1 output byte-for-byte (golden-file test).
+
+### AWS anti-hallucination rules (hard)
+A1. Before writing ANY AWS code, template property, CLI command, or event shape, open
+    the current AWS documentation page for it IN THIS SESSION and cite the URL in a code
+    comment next to its first use. Never invent CLI flags, SAM properties, IAM actions,
+    or event JSON. If docs and memory disagree, docs win.
+A2. Never run a command that creates, modifies, or deletes AWS resources without first
+    printing the exact command and waiting for "go". Read-only `describe/get/list`
+    calls are fine.
+A3. Never put account IDs, ARNs, emails, or keys in committed files.
+A4. `pytest` must pass offline with no AWS credentials set. Use
+    `botocore.stub.Stubber` for AWS clients; never call real AWS from a test.
+
+### Cost guardrails (hard)
+C1. No `sam deploy` unless `aws budgets describe-budgets` shows the USD 5 budget.
+C2. No GPU instances, SageMaker endpoints, EKS clusters, NAT gateways, or provisioned
+    capacity of any kind. If a task seems to need one, STOP and ask.
+C3. Every working session that deploys ends with teardown (T14.1) unless the human
+    explicitly says to keep the stack up, and the decision is logged in
+    `docs/aws_live_notes.md`.
+
+### Honesty rules for results (hard)
+H1. Never tune a parameter after seeing a latency or significance result. Parameters
+    are fixed in config BEFORE the run; changing one afterwards needs a logged reason
+    and a re-run of everything that depends on it.
+H2. Report both sizing rules (round, ceil) for every latency claim (Addendum §8.1).
+H3. No test outcome or p-value is an acceptance gate. Gates check correctness;
+    results are reported as measured.

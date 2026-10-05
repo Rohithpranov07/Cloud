@@ -123,7 +123,7 @@ once it has largely happened.
 |---|---|---|
 | Trace generator | aggregate `std/mean < 0.3` | **0.1363** — agentic share 0.102 → 0.391, aggregate mean 49.92 → 49.36 |
 | Classifier | held-out accuracy `> 0.90` | **0.9675** (whole-trace 0.9734) |
-| Forecaster | per-archetype detects, aggregate does not | agentic forecast **+312%** vs baseline by minute 80; aggregate stays within **±1%** and never detects |
+| Forecaster | per-archetype detects, aggregate does not | agentic forecast **+312%** vs baseline by minute 80; aggregate stays within **1.3%** (max, post-shift) and never detects |
 | Feedback loop | accuracy holds or improves on ≥2 of 3 re-fits | **5 of 5** checkpoints improved (e.g. 0.9779 → 0.9857) |
 
 ### Two deviations, recorded rather than hidden
@@ -135,15 +135,16 @@ once it has largely happened.
    at +7 minutes beats a 2:1 ratio at +5, so the un-tuned configuration is kept.
    Rationale is in the `per_archetype_forecaster.py` docstring.
 
-2. **Aware controller acts at +12 min, not +10.** The forecaster detects at +7, but
+2. **Aware controller acts at +11 min, not +10.** The forecaster detects at +7, but
    `eks_gpu_reserved` serves 10 req/min and the TRD-mandated `round` sizing rule withholds
-   a second unit until demand exceeds 15. Under `ceil` the same scale-up lands at +8,
-   inside the gate — but `ceil` for the aware policy while the baseline uses TRD-mandated
-   `round` would mean part of the measured improvement came from the rounding rule rather
-   than from archetype awareness. The two policies must differ **only** in whether they
-   can see composition, so `round` is used in both. Resolving this properly needs a human
-   decision (apply `ceil` to both, deviating from TRD §2, or relax the §6 gate); the TRD
-   is followed as written until then. Rationale is at the top of
+   a second unit until demand exceeds 15. The first minute with
+   `aware_capacity_eks_gpu_reserved >= 2` is minute 71 (+11). Under `ceil` the same scale-up
+   lands at +8, inside the gate — but `ceil` for the aware policy while the baseline uses
+   TRD-mandated `round` would mean part of the measured improvement came from the rounding
+   rule rather than from archetype awareness. The two policies must differ **only** in
+   whether they can see composition, so `round` is used in both. Resolving this properly
+   needs a human decision (apply `ceil` to both, deviating from TRD §2, or relax the §6
+   gate); the TRD is followed as written until then. Rationale is at the top of
    `archetype_aware_policy.py`.
 
 ### How the comparison is kept honest

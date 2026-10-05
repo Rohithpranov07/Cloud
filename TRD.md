@@ -4,6 +4,7 @@
 > This TRD plays the same role for this project that the "Technical Deep-Dive" plays for HELIX: it is the canonical spec every Claude Code task in `Build-Instructions.md` imports from. If a prompt ever seems to disagree with this document, **this document wins** — stop and reconcile before continuing.
 >
 > Scope: the **Core Prototype** only (local Python simulation, no AWS account required), as scoped in `AWS-Project-Plan-PRD.docx`. AWS deployment is Phase 9 (Stretch) and is explicitly out of scope for "done" on this TRD.
+> Part 2 (latency, statistics, live AWS) is specified in TRD-AWS-Addendum.md §8–§14.
 
 ---
 
