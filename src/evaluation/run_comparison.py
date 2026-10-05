@@ -91,22 +91,31 @@ def _blended_unit_cost(per_unit_capacity: int) -> float:
     return cost_per_request * per_unit_capacity
 
 
-def simulate(cfg: TraceConfig, sizing: str = "round") -> tuple[pd.DataFrame, pd.DataFrame]:
+def simulate(
+    cfg: TraceConfig, sizing: str = "round", *, classifier_seed: int | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run both policies over one trace with one sizing rule. No file I/O.
 
     Returns ``(results, labeled)``: the per-minute EvaluationRow frame and the final
     (post-recalibration) labeled request frame, which the latency model replays.
     ``sizing="round"`` (default) is byte-identical to Part 1 (proven by the golden test).
+
+    ``classifier_seed`` is a keyword-only T10.4 addition (Addendum §10.1): when omitted
+    it defaults to ``cfg.seed``, reproducing the original behaviour exactly. The 30-seed
+    evaluation passes it explicitly so the classifier's own randomness stays fixed while
+    only the trace seed varies across runs.
     """
     start_minute = int(EVALUATION_DEFAULTS["start_minute"])
     horizon = int(EVALUATION_DEFAULTS["forecast_horizon"])
     per_unit_capacity = int(EVALUATION_DEFAULTS["baseline_per_unit_capacity"])
     recalibrate_every = int(EVALUATION_DEFAULTS["recalibrate_every_minutes"])
     budget = float(EVALUATION_DEFAULTS["budget"])
+    if classifier_seed is None:
+        classifier_seed = cfg.seed
 
     trace = generate_trace(cfg)
-    featured = add_proxy_features(trace, seed=cfg.seed)
-    clf = train_classifier(featured, seed=cfg.seed)
+    featured = add_proxy_features(trace, seed=classifier_seed)
+    clf = train_classifier(featured, seed=classifier_seed)
     labeled = classify(featured, clf)
 
     baseline_capacity = 1
@@ -125,7 +134,7 @@ def simulate(cfg: TraceConfig, sizing: str = "round") -> tuple[pd.DataFrame, pd.
             accuracy_before = float(
                 accuracy_score(window["true_archetype"], classify(window, clf)["predicted_archetype"])
             )
-            clf = recalibrate(window, seed=cfg.seed)
+            clf = recalibrate(window, seed=classifier_seed)
             accuracy_after = float(
                 accuracy_score(window["true_archetype"], classify(window, clf)["predicted_archetype"])
             )

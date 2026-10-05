@@ -199,6 +199,37 @@ awareness: the aware policy's post-shift SLA-violation rate (0.009) is two order
 magnitude better than the baseline's (0.998) once rounding is no longer doing the baseline's
 job for it.
 
+### Statistical evaluation
+
+`src/evaluation/multiseed.py` closes gap G2 (Addendum §10): PRD §8 asks for a
+*statistically significant* difference, and every result above comes from one trace
+seed (42). This runs both policies, under both sizing rules, over 30 trace seeds
+(`configs/default.yaml`'s `multiseed.seeds`, 0–29) with the classifier's own randomness
+held fixed at `multiseed.classifier_seed` so only the trace varies, then tests baseline
+vs. aware on three post-shift metrics with a paired two-sided Wilcoxon signed-rank test
+(`python -m src.evaluation.multiseed --workers 4`, 25.6s wall time for all 60 runs):
+
+| metric | sizing | median baseline | median aware | median paired diff [95% CI] | p | r | n |
+|---|---|---|---|---|---|---|---|
+| sla_violation_rate | round | 1.000 | 0.317 | −0.683 [−0.755, −0.622] | 1.9e-09 | −1.00 | 30 |
+| sla_violation_rate | ceil | 1.000 | 0.018 | −0.979 [−0.984, −0.975] | 1.9e-09 | −1.00 | 30 |
+| p95_response_s | round | 2098.1s | 91.2s | −2011.0s [−2490.8, −1376.4] | 1.9e-09 | −1.00 | 30 |
+| p95_response_s | ceil | 737.9s | 26.6s | −712.6s [−741.3, −674.1] | 1.9e-09 | −1.00 | 30 |
+| cost_per_compliant_request | round | NaN | NaN | NaN | NaN | NaN | 0 |
+| cost_per_compliant_request | ceil | 0.479 | 0.007 | −0.473 [−3.607, −0.339] | 2.0e-03 | −1.00 | 10 |
+
+Both sizing-rule-independent metrics (`sla_violation_rate`, `p95_response_s`) show a
+large, consistent, significant improvement across all 30 seeds under both sizing rules —
+`r = -1.00` means every single seed favoured the aware policy, not just the median.
+`cost_per_compliant_request` is `n=0` under `round` for the same reason the Latency
+section above flags: the baseline never has a single post-shift compliant request to
+amortise cost over (its SLA-violation rate is ~1.0 for all 30 seeds, confirming the
+under-provisioning confound is not specific to seed 42), so the metric is correctly
+reported as undefined rather than silently treated as zero. Under `ceil` it is defined
+for only 10 of 30 seeds (both baseline and aware need at least one compliant request for
+the pair to count), still shows the same direction and significance, and its much wider
+CI reflects that smaller n.
+
 ---
 
 ## How this maps to the report

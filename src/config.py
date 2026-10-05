@@ -73,6 +73,11 @@ def _validate(cfg: dict[str, Any], config_path: Path) -> None:
     if int(latency["slots_per_unit"]) < 2:
         raise ValueError(f"{config_path}: latency.slots_per_unit must be >= 2, got {latency['slots_per_unit']}")
 
+    multiseed: dict[str, Any] = cfg["multiseed"]
+    seeds = multiseed["seeds"]
+    if len(seeds) == 0 or len(set(seeds)) != len(seeds):
+        raise ValueError(f"{config_path}: multiseed.seeds must be a non-empty list of unique seeds")
+
 
 _CONFIG: dict[str, Any] = load_config()
 
@@ -92,3 +97,6 @@ EVALUATION_DEFAULTS: dict[str, Any] = dict(_CONFIG["evaluation"])
 
 # --- Latency model parameters (T10.2, Addendum §9.2) -----------------------------
 LATENCY_DEFAULTS: dict[str, Any] = dict(_CONFIG["latency"])
+
+# --- Multi-seed statistical evaluation parameters (T10.4, Addendum §10.1) --------
+MULTISEED_DEFAULTS: dict[str, Any] = dict(_CONFIG["multiseed"])

@@ -8,6 +8,7 @@ import pytest
 
 from src.classifier.archetype_classifier import add_proxy_features, classify, train_classifier
 from src.config import ARCHETYPES
+from src.evaluation.detection import first_detection_minute
 from src.forecaster.per_archetype_forecaster import (
     AGGREGATE_COLUMN,
     build_minute_series,
@@ -202,22 +203,17 @@ def test_per_archetype_detects_the_shift_before_the_aggregate_does(labeled: pd.D
     above the measured pre-shift noise floor of ~3%.
     """
     cfg = _default_config()
-    agentic_baseline, aggregate_baseline = _pre_shift_baselines(labeled, cfg.shift_start_min)
+    _, aggregate_baseline = _pre_shift_baselines(labeled, cfg.shift_start_min)
     threshold = 0.25
 
-    agentic_detected_at: int | None = None
+    agentic_detected_at = first_detection_minute(labeled, cfg, threshold=threshold, horizon=HORIZON)
+
     aggregate_detected_at: int | None = None
     for window_end in range(cfg.shift_start_min, int(labeled["minute"].max()) + 1):
         window = labeled[labeled["minute"] <= window_end]
-        if agentic_detected_at is None:
-            agentic = float(forecast_all_archetypes(window, horizon=HORIZON)["agentic_tool_using"].mean())
-            if agentic / agentic_baseline - 1.0 > threshold:
-                agentic_detected_at = window_end
-        if aggregate_detected_at is None:
-            aggregate = float(forecast_aggregate(window, horizon=HORIZON).mean())
-            if aggregate / aggregate_baseline - 1.0 > threshold:
-                aggregate_detected_at = window_end
-        if agentic_detected_at is not None and aggregate_detected_at is not None:
+        aggregate = float(forecast_aggregate(window, horizon=HORIZON).mean())
+        if aggregate / aggregate_baseline - 1.0 > threshold:
+            aggregate_detected_at = window_end
             break
 
     assert agentic_detected_at is not None, "per-archetype forecaster never detected the shift"
