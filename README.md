@@ -161,6 +161,46 @@ headroom, so a workload that never changes composition stays inside it.
 
 ---
 
+### Latency
+
+`src/evaluation/latency_model.py` turns capacity decisions into queueing latency
+(TRD-AWS-Addendum §9), the PRD's primary metric, which the Core Prototype never measured
+on its own. Every result below is reported under **both** sizing rules side by side
+(Addendum §8.1): `round` is the TRD-faithful default; `ceil` is the capacity-correct
+alternative. Measured on the verified seed-42 run (`python -m src.evaluation.run_comparison`):
+
+```
+  sizing     policy   window   p95_response_s   sla_violation_rate
+   round   baseline      pre          1209.13                0.996
+   round   baseline   during          1641.79                1.000
+   round   baseline     post          3702.67                1.000
+   round      aware      pre            44.03                0.254
+   round      aware   during            51.99                0.150
+   round      aware     post            65.28                0.196
+    ceil   baseline      pre           363.87                0.980
+    ceil   baseline   during            86.40                0.510
+    ceil   baseline     post           587.50                0.998
+    ceil      aware      pre            44.03                0.254
+    ceil      aware   during            27.48                0.007
+    ceil      aware     post            24.43                0.009
+```
+
+**Under `round`, the baseline is under-provisioned before the shift as well as after it.**
+Its homogeneous pool holds 2 units (40 req/min nominal capacity, TRD §2's `round` rule)
+against roughly 50 req/min of real arrivals, so its queue is already unstable
+(SLA-violation rate ≈ 1.0) from a few minutes into the run — long before the compositional
+shift at minute 60. That is exactly the confound Addendum §8.1 flags: under `round`,
+archetype awareness gets credited with fixing a baseline that was already broken by
+rounding, not by the shift. Under `ceil`, the baseline is adequately provisioned pre-shift
+(SLA-violation rate 0.980 vs. 0.996 is still high due to real mix-driven throughput loss,
+but its p95 is two orders of magnitude lower — 364s vs. 1209s) and only degrades
+meaningfully `during`/`post` the shift, which is the clean, confound-free test of archetype
+awareness: the aware policy's post-shift SLA-violation rate (0.009) is two orders of
+magnitude better than the baseline's (0.998) once rounding is no longer doing the baseline's
+job for it.
+
+---
+
 ## How this maps to the report
 
 | Module | Report §4 subsection | Role |

@@ -20,11 +20,15 @@ Every Phase 1-6 function is imported and called, never reimplemented.
 
 from __future__ import annotations
 
+import json
+from typing import Literal
+
 import matplotlib
 
 matplotlib.use("Agg")  # headless: the evaluation writes files, it never opens a window
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score
 
@@ -41,12 +45,17 @@ from src.config import (
 from src.controller.archetype_aware_policy import archetype_aware_scaling_decision
 from src.controller.baseline_policy import BASELINE_POOL, baseline_scaling_decision
 from src.cost_governance.budget_projector import check_budget, project_spend
+from src.evaluation.latency_model import ARRIVAL_SEED, simulate_policy_latency, summarise_latency
 from src.feedback.recalibration import recalibrate
 from src.forecaster.per_archetype_forecaster import forecast_aggregate, forecast_all_archetypes
 from src.trace_gen.generator import TraceConfig, _default_config, generate_trace
 
 RESULTS_PATH = DATA_DIR / "evaluation_results.csv"
 PLOT_PATH = DATA_DIR / "capacity_comparison.png"
+LATENCY_SUMMARY_PATH = DATA_DIR / "latency_summary.json"
+LATENCY_PLOT_PATH = DATA_DIR / "latency_comparison.png"
+SIZING_RULES: tuple[str, ...] = ("round", "ceil")
+POLICIES: tuple[Literal["baseline", "aware"], ...] = ("baseline", "aware")
 
 # --- How the two cost projections are made comparable ---------------------------------
 #
@@ -82,42 +91,30 @@ def _blended_unit_cost(per_unit_capacity: int) -> float:
     return cost_per_request * per_unit_capacity
 
 
-def run() -> None:
-    """Run both policies over one trace and write the two evaluation artifacts."""
-    cfg: TraceConfig = _default_config()
+def simulate(cfg: TraceConfig, sizing: str = "round") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run both policies over one trace with one sizing rule. No file I/O.
+
+    Returns ``(results, labeled)``: the per-minute EvaluationRow frame and the final
+    (post-recalibration) labeled request frame, which the latency model replays.
+    ``sizing="round"`` (default) is byte-identical to Part 1 (proven by the golden test).
+    """
     start_minute = int(EVALUATION_DEFAULTS["start_minute"])
     horizon = int(EVALUATION_DEFAULTS["forecast_horizon"])
     per_unit_capacity = int(EVALUATION_DEFAULTS["baseline_per_unit_capacity"])
     recalibrate_every = int(EVALUATION_DEFAULTS["recalibrate_every_minutes"])
     budget = float(EVALUATION_DEFAULTS["budget"])
-    sizing = str(EVALUATION_DEFAULTS["sizing_rule"])
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    # --- Phase 1-2: trace, proxy features, classifier -----------------------------
-    print("=" * 78)
-    print("SEMANTIC AUTOSCALING — ARCHETYPE-AWARE vs. ARCHETYPE-AGNOSTIC")
-    print("=" * 78)
-    print(f"\ntrace: {cfg.duration_minutes} min @ {cfg.base_rate_per_min} req/min, "
-          f"shift at minute {cfg.shift_start_min} over {cfg.shift_duration_min} min, seed {cfg.seed}")
 
     trace = generate_trace(cfg)
     featured = add_proxy_features(trace, seed=cfg.seed)
     clf = train_classifier(featured, seed=cfg.seed)
     labeled = classify(featured, clf)
-    print(f"generated {len(labeled)} requests\n")
 
-    # --- Phase 3-6: minute-by-minute head-to-head ---------------------------------
     baseline_capacity = 1
     aware_capacity: dict[str, int] = {}
     rows: list[dict] = []
     cumulative_actual_spend = 0.0
+    baseline_actual_spend = 0.0
     blended_unit_cost = _blended_unit_cost(per_unit_capacity)
-
-    print(f"recalibrating every {recalibrate_every} minutes")
-    print(f"budget {budget} for the {cfg.duration_minutes}-minute window; "
-          f"baseline blended unit cost {_blended_unit_cost(per_unit_capacity):.5f}/min")
-    print("-" * 78)
 
     for minute in range(start_minute, cfg.duration_minutes):
         window = labeled[labeled["minute"] <= minute]
@@ -152,6 +149,7 @@ def run() -> None:
         # by the end of the billing window, so the figure compared against the budget is
         # spend already incurred plus spend projected over the minutes remaining.
         cumulative_actual_spend += project_spend(aware_capacity, 1)
+        baseline_actual_spend += baseline_capacity * blended_unit_cost
 
         aware_spend = cumulative_actual_spend + project_spend(aware_capacity, minutes_remaining)
         baseline_spend = cumulative_actual_spend + (
@@ -173,18 +171,76 @@ def run() -> None:
             "aware_breach_projected": aware_budget["breach_projected"],
             "baseline_budget_action": baseline_budget["action"],
             "aware_budget_action": aware_budget["action"],
+            # --- T10.3: each policy's own realised spend (Addendum §9.5) ---
+            "baseline_actual_spend": baseline_actual_spend,
         }
         for primitive in PRIMITIVE_MAP.values():
             row[f"aware_capacity_{primitive}"] = int(aware_capacity.get(primitive, 0))
         rows.append(row)
 
-    results = pd.DataFrame(rows)
-    results.to_csv(RESULTS_PATH, index=False)
+    return pd.DataFrame(rows), labeled
+
+
+def run() -> None:
+    """Run both sizing rules and write every evaluation and latency artifact."""
+    cfg: TraceConfig = _default_config()
+    per_unit_capacity = int(EVALUATION_DEFAULTS["baseline_per_unit_capacity"])
+    recalibrate_every = int(EVALUATION_DEFAULTS["recalibrate_every_minutes"])
+    budget = float(EVALUATION_DEFAULTS["budget"])
+    default_sizing = str(EVALUATION_DEFAULTS["sizing_rule"])
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("=" * 78)
+    print("SEMANTIC AUTOSCALING — ARCHETYPE-AWARE vs. ARCHETYPE-AGNOSTIC")
+    print("=" * 78)
+    print(f"\ntrace: {cfg.duration_minutes} min @ {cfg.base_rate_per_min} req/min, "
+          f"shift at minute {cfg.shift_start_min} over {cfg.shift_duration_min} min, seed {cfg.seed}")
+    print(f"generated {len(generate_trace(cfg))} requests\n")
+
+    print(f"recalibrating every {recalibrate_every} minutes")
+    print(f"budget {budget} for the {cfg.duration_minutes}-minute window; "
+          f"baseline blended unit cost {_blended_unit_cost(per_unit_capacity):.5f}/min")
     print("-" * 78)
+
+    results_by_sizing: dict[str, pd.DataFrame] = {}
+    labeled_by_sizing: dict[str, pd.DataFrame] = {}
+    for sizing in SIZING_RULES:
+        print(f"\n[sizing={sizing}]")
+        results_by_sizing[sizing], labeled_by_sizing[sizing] = simulate(cfg, sizing=sizing)
+    print("-" * 78)
+
+    results = results_by_sizing[default_sizing]
+    results.to_csv(RESULTS_PATH, index=False)
     print(f"\nwrote {RESULTS_PATH} ({len(results)} rows)")
 
     _plot(results, cfg, budget)
     _summarise(results, cfg)
+
+    # --- T10.3: latency outputs, both policies x both sizing rules (Addendum §9.5) ---
+    per_request_by_sizing: dict[str, dict[str, pd.DataFrame]] = {}
+    latency_summary: dict[str, dict[str, dict]] = {}
+    shift_end = cfg.shift_start_min + cfg.shift_duration_min
+
+    for sizing in SIZING_RULES:
+        per_request_by_sizing[sizing] = {}
+        latency_summary[sizing] = {}
+        for policy in POLICIES:
+            per_request = simulate_policy_latency(
+                labeled_by_sizing[sizing], results_by_sizing[sizing], policy, seed=ARRIVAL_SEED
+            )
+            per_request_by_sizing[sizing][policy] = per_request
+            per_request.to_csv(DATA_DIR / f"latency_per_request_{policy}_{sizing}.csv", index=False)
+            latency_summary[sizing][policy] = summarise_latency(
+                per_request, cfg.shift_start_min, shift_end
+            )
+
+    with LATENCY_SUMMARY_PATH.open("w", encoding="utf-8") as handle:
+        json.dump(latency_summary, handle, indent=2)
+    print(f"\nwrote {LATENCY_SUMMARY_PATH}")
+
+    _plot_latency(per_request_by_sizing, cfg)
+    _summarise_latency(latency_summary)
 
 
 def _plot(results: pd.DataFrame, cfg: TraceConfig, budget: float) -> None:
@@ -304,6 +360,77 @@ def _summarise(results: pd.DataFrame, cfg: TraceConfig) -> None:
             print(f"  detection lead time for the archetype-aware layer: {lead} minutes")
     else:
         print("  aggregate-only NEVER projects a breach — it cannot see the cost shift at all")
+
+
+def _plot_latency(per_request_by_sizing: dict[str, dict[str, pd.DataFrame]], cfg: TraceConfig) -> None:
+    """Write ``data/latency_comparison.png`` (Addendum §9.5): two panels, one subplot
+    column per sizing rule — (a) post-shift p95 response per archetype, grouped by
+    policy; (b) the rolling 5-minute SLA-violation rate over time, shift window shaded.
+    """
+    shift_start = cfg.shift_start_min
+    shift_end = shift_start + cfg.shift_duration_min
+    colours = {"baseline": "#64748b", "aware": "#dc2626"}
+
+    fig, axes = plt.subplots(2, len(SIZING_RULES), figsize=(13, 9), squeeze=False)
+
+    for col, sizing in enumerate(SIZING_RULES):
+        # (a) post-shift p95 response per archetype, grouped by policy.
+        ax_p95 = axes[0][col]
+        positions = np.arange(len(ARCHETYPES))
+        bar_width = 0.35
+        for offset, policy in zip((-0.5, 0.5), POLICIES):
+            per_request = per_request_by_sizing[sizing][policy]
+            post = per_request[per_request["minute"] >= shift_end]
+            p95_by_archetype = [
+                float(post.loc[post["true_archetype"] == a, "response_s"].quantile(0.95))
+                if (post["true_archetype"] == a).any()
+                else 0.0
+                for a in ARCHETYPES
+            ]
+            ax_p95.bar(
+                positions + offset * bar_width, p95_by_archetype, width=bar_width,
+                color=colours[policy], label=policy,
+            )
+        ax_p95.set_xticks(positions)
+        ax_p95.set_xticklabels(ARCHETYPES, rotation=30, ha="right", fontsize=8)
+        ax_p95.set_ylabel("post-shift p95 response (s)")
+        ax_p95.set_title(f"sizing={sizing}", fontsize=11)
+        ax_p95.legend(fontsize=8)
+        ax_p95.grid(alpha=0.15, axis="y")
+
+        # (b) rolling 5-minute SLA-violation rate over time, shift window shaded.
+        ax_rate = axes[1][col]
+        for policy in POLICIES:
+            per_request = per_request_by_sizing[sizing][policy]
+            per_minute = per_request.groupby("minute")["sla_violated"].mean()
+            per_minute = per_minute.reindex(range(cfg.duration_minutes), fill_value=0.0)
+            rolling = per_minute.rolling(5, min_periods=1).mean()
+            ax_rate.plot(rolling.index, rolling.to_numpy(), color=colours[policy], label=policy, lw=1.8)
+        ax_rate.axvspan(shift_start, shift_end, color="#dc2626", alpha=0.07)
+        ax_rate.set_xlabel("simulation minute")
+        ax_rate.set_ylabel("rolling 5-min SLA-violation rate")
+        ax_rate.legend(fontsize=8)
+        ax_rate.grid(alpha=0.15)
+
+    fig.suptitle("Latency under both sizing rules (Addendum §8.1)", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(LATENCY_PLOT_PATH, dpi=150)
+    plt.close(fig)
+    print(f"wrote {LATENCY_PLOT_PATH}")
+
+
+def _summarise_latency(latency_summary: dict[str, dict[str, dict]]) -> None:
+    """Print the policy x sizing x window latency table the README's Latency section cites."""
+    print("\n" + "=" * 78)
+    print("LATENCY (Addendum §8.1 — reported under BOTH sizing rules)")
+    print("=" * 78)
+    print(f"\n{'sizing':>8} {'policy':>10} {'window':>8} {'p95_response_s':>16} {'sla_violation_rate':>20}")
+    for sizing in SIZING_RULES:
+        for policy in POLICIES:
+            for window in ("pre", "during", "post"):
+                stats = latency_summary[sizing][policy]["by_window"][window]
+                print(f"{sizing:>8} {policy:>10} {window:>8} {stats['p95_response_s']:>16.2f} "
+                      f"{stats['sla_violation_rate']:>20.3f}")
 
 
 if __name__ == "__main__":

@@ -119,7 +119,11 @@ def test_import_direction_is_never_sideways_or_backward(path: Path) -> None:
         if imported not in PIPELINE_ORDER:  # src.config is a shared root helper
             continue
         imported_rank = PIPELINE_ORDER.index(imported)
-        assert imported_rank < own_rank, (
+        # A package may import from its own sibling modules (e.g. evaluation/run_comparison.py
+        # importing evaluation/latency_model.py) — CLAUDE.md's "never sideways" boundary is
+        # about the seven listed PACKAGES, not files within one of them. Strictly earlier
+        # packages are required otherwise.
+        assert imported_rank < own_rank or imported == package, (
             f"{path}:{line_number} '{package}' imports from '{imported}', which is not earlier "
             "in the pipeline (CLAUDE.md module boundaries)"
         )
@@ -219,8 +223,8 @@ def test_nfr1_all_third_party_imports_are_pinned_in_requirements() -> None:
     }
     distribution_names = {"yaml": "pyyaml", "sklearn": "scikit-learn"}
     standard_library = {
-        "__future__", "ast", "collections", "dataclasses", "heapq", "math", "pathlib",
-        "re", "typing", "warnings",
+        "__future__", "ast", "collections", "dataclasses", "heapq", "json", "math",
+        "pathlib", "re", "typing", "warnings",
     }
 
     for path in SOURCE_FILES:

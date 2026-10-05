@@ -11,15 +11,19 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.config import DATA_DIR
-from src.evaluation.run_comparison import RESULTS_PATH, run
+from src.evaluation.run_comparison import simulate
+from src.trace_gen.generator import _default_config
 
 GOLDEN_PATH = Path(__file__).resolve().parent / "golden" / "evaluation_results_round.csv"
 
 
 def test_default_sizing_reproduces_the_golden_evaluation_csv() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    run()
-    produced = pd.read_csv(RESULTS_PATH)
+    """``sizing="round"`` must still reproduce Part 1 byte-for-byte (Addendum §13).
+
+    T10.3 added ``baseline_actual_spend``, a genuinely new column (Addendum §9.5) that
+    the frozen golden file predates — so this compares only the golden file's own
+    columns, which is exactly the set the sizing refactor must not change.
+    """
+    results, _ = simulate(_default_config(), sizing="round")
     golden = pd.read_csv(GOLDEN_PATH)
-    pd.testing.assert_frame_equal(produced, golden)
+    pd.testing.assert_frame_equal(results[list(golden.columns)], golden)

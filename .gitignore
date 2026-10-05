@@ -8,5 +8,6 @@ __pycache__/
 # Generated artifacts land in data/ at runtime; keep the directory, not its contents.
 data/*.csv
 data/*.png
+data/*.json
 !data/.gitkeep
 !tests/golden/evaluation_results_round.csv
