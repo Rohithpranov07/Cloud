@@ -218,7 +218,9 @@ def test_nfr1_all_third_party_imports_are_pinned_in_requirements() -> None:
         if line.strip() and not line.strip().startswith("#")
     }
     distribution_names = {"yaml": "pyyaml", "sklearn": "scikit-learn"}
-    standard_library = {"__future__", "ast", "dataclasses", "pathlib", "re", "typing", "warnings"}
+    standard_library = {
+        "__future__", "ast", "dataclasses", "math", "pathlib", "re", "typing", "warnings",
+    }
 
     for path in SOURCE_FILES:
         tree = ast.parse(path.read_text(encoding="utf-8"))

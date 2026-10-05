@@ -9,11 +9,27 @@ archetype-aware policy is built to expose.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
 BASELINE_POOL: str = "homogeneous_pool"
 MIN_CAPACITY: int = 1  # TRD §6: capacity never goes below 1
+
+
+def _required_units(demand: float, unit_capacity: int, sizing: str) -> int:
+    """TRD §2 / Addendum §9.3 sizing rule, selectable by keyword.
+
+    ``round`` is exactly the TRD §2 formula (default, byte-identical to Part 1).
+    ``ceil`` is the capacity-correct alternative (Addendum §8.1): a pool is never
+    under-provisioned for demand that sits just above a unit boundary.
+    """
+    if sizing == "round":
+        return max(MIN_CAPACITY, round(demand / unit_capacity))
+    if sizing == "ceil":
+        return max(MIN_CAPACITY, math.ceil(demand / unit_capacity))
+    raise ValueError(f"unknown sizing rule: {sizing!r} (expected 'round' or 'ceil')")
 
 
 def _summarise_forecast(aggregate_forecast: pd.Series | float | int) -> float:
@@ -35,11 +51,15 @@ def baseline_scaling_decision(
     aggregate_forecast: pd.Series | float | int,
     current_capacity: int,
     per_unit_capacity: int = 20,
+    sizing: str = "round",
 ) -> dict:
     """Size one homogeneous pool from the aggregate forecast alone.
 
     Returns a ScalingDecision exactly as shaped in TRD §1.5:
     ``{"action", "target_pool", "delta", "new_capacity"}``.
+
+    ``sizing="round"`` (default) reproduces the TRD §2 formula byte-for-byte.
+    ``sizing="ceil"`` is the Addendum §9.3 alternative.
     """
     if per_unit_capacity <= 0:
         raise ValueError(f"per_unit_capacity must be positive, got {per_unit_capacity}")
@@ -50,7 +70,7 @@ def baseline_scaling_decision(
     if predicted_load < 0:
         raise ValueError(f"predicted load cannot be negative, got {predicted_load}")
 
-    required_units = max(MIN_CAPACITY, round(predicted_load / per_unit_capacity))
+    required_units = _required_units(predicted_load, per_unit_capacity, sizing)
     return {
         "action": "scale",
         "target_pool": BASELINE_POOL,

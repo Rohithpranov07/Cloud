@@ -63,6 +63,10 @@ def _validate(cfg: dict[str, Any], config_path: Path) -> None:
         if abs(sum(mix.values()) - 1.0) > 1e-9:
             raise ValueError(f"{config_path}: trace.{mix_name} proportions must sum to 1.0")
 
+    sizing_rule = cfg["evaluation"]["sizing_rule"]
+    if sizing_rule not in ("round", "ceil"):
+        raise ValueError(f"{config_path}: evaluation.sizing_rule must be 'round' or 'ceil', got {sizing_rule!r}")
+
 
 _CONFIG: dict[str, Any] = load_config()
 

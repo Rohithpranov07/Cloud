@@ -12,7 +12,7 @@ import pytest
 
 from src.classifier.archetype_classifier import add_proxy_features, classify, train_classifier
 from src.config import ARCHETYPES, PRIMITIVE_MAP, PRIMITIVE_UNIT_CAPACITY
-from src.controller.archetype_aware_policy import archetype_aware_scaling_decision
+from src.controller.archetype_aware_policy import _required_units, archetype_aware_scaling_decision
 from src.controller.baseline_policy import BASELINE_POOL, baseline_scaling_decision
 from src.forecaster.per_archetype_forecaster import forecast_aggregate, forecast_all_archetypes
 from src.trace_gen.generator import _default_config, generate_trace
@@ -98,6 +98,78 @@ def test_baseline_rejects_invalid_input() -> None:
         baseline_scaling_decision(pd.Series([], dtype=float), 1)
     with pytest.raises(ValueError, match="negative"):
         baseline_scaling_decision(-5.0, 1)
+
+
+# ================================================================================
+# T10.1 — sizing keyword (round default, ceil option), Addendum §9.3
+# ================================================================================
+
+# Boundary cases against a unit capacity of 20: 0 (zero demand, floored to minimum),
+# an exact multiple (no remainder), a multiple + 0.01 (round still floors, ceil bumps up),
+# and a multiple + 0.5 (round's halfway case vs. ceil).
+_SIZING_BOUNDARY_CASES = [
+    # (demand, expected_round, expected_ceil)
+    (0.0, 1, 1),
+    (20.0, 1, 1),
+    (40.0, 2, 2),
+    (40.01, 2, 3),
+    (40.5, 2, 3),  # round(2.025) -> 2 (nearest), ceil(2.0005) -> 3
+]
+
+
+@pytest.mark.parametrize(("demand", "expected_round", "expected_ceil"), _SIZING_BOUNDARY_CASES)
+def test_baseline_sizing_keyword_boundary_cases(
+    demand: float, expected_round: int, expected_ceil: int
+) -> None:
+    per_unit = 20
+    assert baseline_scaling_decision(pd.Series([demand] * HORIZON), 0, per_unit, "round")[
+        "new_capacity"
+    ] == expected_round
+    assert baseline_scaling_decision(pd.Series([demand] * HORIZON), 0, per_unit, "ceil")[
+        "new_capacity"
+    ] == expected_ceil
+
+
+def test_baseline_rejects_unknown_sizing_rule() -> None:
+    with pytest.raises(ValueError, match="sizing rule"):
+        baseline_scaling_decision(pd.Series([10.0]), 0, 20, "banker")
+
+
+@pytest.mark.parametrize(("demand", "expected_round", "expected_ceil"), _SIZING_BOUNDARY_CASES)
+def test_aware_sizing_keyword_boundary_cases(
+    demand: float, expected_round: int, expected_ceil: int
+) -> None:
+    # eks_gpu_reserved has unit capacity 10; scale demand proportionally so the same
+    # boundary relationships (0, exact multiple, +0.01, +0.5) hold against its throughput.
+    unit_capacity = PRIMITIVE_UNIT_CAPACITY["eks_gpu_reserved"]
+    scaled_demand = demand / 20 * unit_capacity
+    expected_round_capacity = 0 if demand == 0.0 else expected_round
+    expected_ceil_capacity = 0 if demand == 0.0 else expected_ceil
+
+    for sizing, expected in (("round", expected_round_capacity), ("ceil", expected_ceil_capacity)):
+        decisions = {
+            d["target_pool"]: d["new_capacity"]
+            for d in archetype_aware_scaling_decision(
+                _flat_forecast(agentic_tool_using=scaled_demand), {}, sizing
+            )
+        }
+        actual = decisions.get("eks_gpu_reserved", 0)
+        assert actual == expected, (
+            f"sizing={sizing!r} demand={scaled_demand} expected={expected} actual={actual}"
+        )
+
+
+def test_aware_rejects_unknown_sizing_rule() -> None:
+    with pytest.raises(ValueError, match="sizing rule"):
+        archetype_aware_scaling_decision(_flat_forecast(agentic_tool_using=50.0), {}, "banker")
+
+
+def test_aware_zero_demand_scales_to_zero_under_both_rules() -> None:
+    """The zero-demand -> 0 rule (not the MIN_CAPACITY floor) holds for both sizing rules."""
+    provisioned = {"eks_gpu_reserved": 4}
+    for sizing in ("round", "ceil"):
+        decisions = archetype_aware_scaling_decision(_flat_forecast(), provisioned, sizing)
+        assert [d for d in decisions if d["target_pool"] == "eks_gpu_reserved"][0]["new_capacity"] == 0
 
 
 def test_baseline_is_blind_to_composition(labeled: pd.DataFrame) -> None:
@@ -186,7 +258,7 @@ def test_aware_scales_up_gpu_reserved_in_response_to_the_shift(labeled: pd.DataF
     to the compositional shift, while the baseline pool stays flat.
 
     Timing: TRD §6 words this as "within 10 minutes of shift_start_min". The measured
-    figure is +12 minutes, because the TRD-mandated `round` sizing rule needs
+    figure is +11 minutes, because the TRD-mandated `round` sizing rule needs
     eks_gpu_reserved demand above 15 req/min before granting a second 10 req/min unit.
     That is capacity quantisation, not a detection failure -- the forecaster sees the
     shift at +7 minutes (see tests/test_forecaster.py). The rationale for keeping `round`
@@ -223,14 +295,12 @@ def test_aware_scales_up_gpu_reserved_in_response_to_the_shift(labeled: pd.DataF
 
 
 def test_aware_detection_precedes_action_by_the_quantisation_lag(labeled: pd.DataFrame) -> None:
-    """Records WHY the scale-up lands at +12 rather than the TRD §6 +10: unit granularity.
+    """Records WHY the scale-up lands at +11 rather than the TRD §6 +10: unit granularity.
 
     Under `ceil` the same demand curve would trigger the second unit at +8 minutes. This
     test pins that difference so the trade-off documented in archetype_aware_policy.py is
     measured rather than asserted.
     """
-    import math
-
     cfg = _default_config()
     unit_capacity = PRIMITIVE_UNIT_CAPACITY["eks_gpu_reserved"]
 
@@ -239,9 +309,9 @@ def test_aware_detection_precedes_action_by_the_quantisation_lag(labeled: pd.Dat
     for minute in range(cfg.shift_start_min, cfg.shift_start_min + 21):
         window = labeled[labeled["minute"] <= minute]
         demand = float(forecast_all_archetypes(window, HORIZON)["agentic_tool_using"].max())
-        if round_at is None and max(1, round(demand / unit_capacity)) >= 2:
+        if round_at is None and _required_units(demand, unit_capacity, "round") >= 2:
             round_at = minute
-        if ceil_at is None and max(1, math.ceil(demand / unit_capacity)) >= 2:
+        if ceil_at is None and _required_units(demand, unit_capacity, "ceil") >= 2:
             ceil_at = minute
 
     assert round_at is not None and ceil_at is not None

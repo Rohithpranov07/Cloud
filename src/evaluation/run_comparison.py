@@ -90,6 +90,7 @@ def run() -> None:
     per_unit_capacity = int(EVALUATION_DEFAULTS["baseline_per_unit_capacity"])
     recalibrate_every = int(EVALUATION_DEFAULTS["recalibrate_every_minutes"])
     budget = float(EVALUATION_DEFAULTS["budget"])
+    sizing = str(EVALUATION_DEFAULTS["sizing_rule"])
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -138,11 +139,11 @@ def run() -> None:
 
         # Phase 3-4: forecast, then decide, independently for each policy.
         baseline_capacity = baseline_scaling_decision(
-            forecast_aggregate(window, horizon), baseline_capacity, per_unit_capacity
+            forecast_aggregate(window, horizon), baseline_capacity, per_unit_capacity, sizing
         )["new_capacity"]
 
         for decision in archetype_aware_scaling_decision(
-            forecast_all_archetypes(window, horizon), aware_capacity
+            forecast_all_archetypes(window, horizon), aware_capacity, sizing
         ):
             aware_capacity[decision["target_pool"]] = decision["new_capacity"]
 

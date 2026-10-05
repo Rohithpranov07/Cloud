@@ -12,6 +12,8 @@ hardcoded here (Anti-Hallucination rule 3, T4.2 requirement).
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -19,11 +21,11 @@ from src.config import ARCHETYPES, PRIMITIVE_MAP, PRIMITIVE_UNIT_CAPACITY
 
 MIN_CAPACITY: int = 1  # mirrors the baseline floor: a primitive in use never drops below 1
 
-# Rounding rule. TRD §2 fixes the BASELINE's sizing formula as
-# `max(1, round(predicted_load / per_unit_capacity))`. The aware policy deliberately uses
-# the SAME rule, even though `ceil` would be the more correct choice for a capacity
-# controller (`round` under-provisions whenever demand sits just above a unit boundary --
-# e.g. 11.2 req/min served by one 10 req/min unit).
+# Rounding rule — human decision recorded (Addendum §8.1). TRD §2 fixes the BASELINE's
+# sizing formula as `max(1, round(predicted_load / per_unit_capacity))`. The aware policy
+# deliberately uses the SAME rule by default, even though `ceil` would be the more correct
+# choice for a capacity controller (`round` under-provisions whenever demand sits just
+# above a unit boundary -- e.g. 11.2 req/min served by one 10 req/min unit).
 #
 # The reason is experimental hygiene, not agreement with `round`: the two policies must
 # differ ONLY in whether they can see workload composition. If the aware policy used
@@ -31,15 +33,34 @@ MIN_CAPACITY: int = 1  # mirrors the baseline floor: a primitive in use never dr
 # from the rounding rule rather than from archetype awareness -- exactly the
 # not-apples-to-apples confound flagged in PRD §9.
 #
-# CONSEQUENCE, measured and recorded rather than hidden: `round` costs the aware policy
-# about five minutes of reaction time. The forecaster detects the shift at minute 67
-# (+7), but eks_gpu_reserved demand must exceed 15 req/min before `round` grants a second
-# unit, which happens at minute 72 (+12). Under `ceil` the same scale-up lands at minute
-# 68 (+8). TRD §6 words the controller gate as "within 10 minutes of shift_start_min", so
-# the TRD-faithful, confound-free configuration misses that gate by two minutes. This is
-# capacity QUANTISATION, not a detection failure. Resolving it needs a human decision --
-# either apply `ceil` to both policies (a deviation from the TRD §2 baseline formula), or
-# relax the §6 gate to match -- so the TRD is followed as written until that call is made.
+# CONSEQUENCE, measured on the verified seed-42 run: the forecaster detects the shift at
+# minute 67 (+7), but eks_gpu_reserved demand must exceed 15 req/min before `round` grants
+# a second unit, which happens at minute 71 (+11). Under `ceil` the same scale-up lands at
+# minute 68 (+8). TRD §6 words the controller gate as "within 10 minutes of
+# shift_start_min", so the TRD-faithful, confound-free configuration misses that gate by
+# one minute. This is capacity QUANTISATION, not a detection failure.
+#
+# THE DECISION (Addendum §8.1, settling what was previously open): the Core Prototype
+# keeps `round` as the default so Part 1's headline numbers never change, and the TRD §2
+# baseline formula is followed as written. `sizing="ceil"` is now a first-class keyword
+# (Addendum §9.3) on both policies, and every Part 2 latency result is reported under BOTH
+# rules side by side -- `ceil` is the clean test of archetype awareness, `round` is
+# reported next to it with this explanation, never silently preferred either way.
+
+
+def _required_units(demand: float, unit_capacity: int, sizing: str) -> int:
+    """TRD §2 / Addendum §9.3 sizing rule, selectable by keyword.
+
+    Keeps the aware policy's zero-demand rule under BOTH rules: a primitive with
+    genuinely no demand scales to zero rather than floor-ing to ``MIN_CAPACITY``.
+    """
+    if demand <= 0.0:
+        return 0
+    if sizing == "round":
+        return max(MIN_CAPACITY, round(demand / unit_capacity))
+    if sizing == "ceil":
+        return max(MIN_CAPACITY, math.ceil(demand / unit_capacity))
+    raise ValueError(f"unknown sizing rule: {sizing!r} (expected 'round' or 'ceil')")
 
 
 def _summarise_forecast(forecast: pd.Series | float | int, archetype: str) -> float:
@@ -58,6 +79,7 @@ def _summarise_forecast(forecast: pd.Series | float | int, archetype: str) -> fl
 def archetype_aware_scaling_decision(
     per_archetype_forecast: dict,
     current_capacity: dict,
+    sizing: str = "round",
 ) -> list[dict]:
     """Size every serving primitive from its own archetype demand.
 
@@ -67,6 +89,9 @@ def archetype_aware_scaling_decision(
 
     Returns a list of ScalingDecision dicts (TRD §1.5), one per primitive whose ``delta``
     is non-zero. A primitive whose required capacity is unchanged emits no decision.
+
+    ``sizing="round"`` (default) reproduces Part 1 output byte-for-byte.
+    ``sizing="ceil"`` is the Addendum §9.3 alternative.
     """
     unknown = set(per_archetype_forecast) - set(ARCHETYPES)
     if unknown:
@@ -87,7 +112,7 @@ def archetype_aware_scaling_decision(
         unit_capacity = PRIMITIVE_UNIT_CAPACITY[primitive]
         # A primitive with genuinely no demand scales to zero; one with any demand keeps
         # at least one unit, so a live workload is never left with nowhere to run.
-        required_units = 0 if demand <= 0.0 else max(MIN_CAPACITY, round(demand / unit_capacity))
+        required_units = _required_units(demand, unit_capacity, sizing)
         delta = int(required_units - current_capacity.get(primitive, 0))
         if delta == 0:
             continue
