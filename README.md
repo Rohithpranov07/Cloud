@@ -230,6 +230,38 @@ for only 10 of 30 seeds (both baseline and aware need at least one compliant req
 the pair to count), still shows the same direction and significance, and its much wider
 CI reflects that smaller n.
 
+### Sensitivity
+
+`src/evaluation/sensitivity.py` (Addendum §10.2) asks how large a composition shift must
+be before archetype awareness pays off: a grid of post-shift agentic share ∈ {20%, 30%,
+40%, 50%} × SLA multiplier (interactive archetypes) ∈ {2×, 3×, 5×} × sizing ∈
+{round, ceil}, 10 seeds per cell (240 runs total, 68.7s wall time with
+`python -m src.evaluation.sensitivity --workers 6`). Each cell is the median
+(baseline − aware) post-shift SLA-violation-rate difference across its 10 seeds:
+
+```
+[sizing=round]                          [sizing=ceil]
+agentic_share   0.2   0.3   0.4   0.5   agentic_share   0.2   0.3   0.4   0.5
+sla_multiplier                          sla_multiplier
+2.0            0.69  0.63  0.61  0.48   2.0            0.64  0.89  0.90  0.94
+3.0            0.81  0.69  0.68  0.50   3.0            0.69  0.97  0.98  0.99
+5.0            0.89  0.71  0.77  0.52   5.0            0.60  0.99  1.00  1.00
+```
+
+Every cell in both grids is positive — the aware policy never performs worse than the
+baseline anywhere tested. Under `ceil`, at the default SLA multiplier (3×), the
+difference is positive in **10 of 10 seeds at every tested agentic share, including the
+smallest (20%)**: the grid finds no crossover point within its tested range where
+archetype awareness stops paying off. This holds at all three SLA multipliers, so the
+smallest share this grid can name is the smallest one it tested, 20% — not a true
+threshold, since the grid never explores shares small enough to find where the effect
+actually vanishes (a post-shift agentic share below its own pre-shift level, 10%, was not
+tested). `round`'s lower, non-monotonic-looking differences (e.g. 0.81 at 20% vs. 0.68 at
+40%) are a visible symptom of the same confound flagged in Latency above: the baseline's
+SLA-violation rate is already near 1.0 before any shift under `round`, so the *headroom*
+left for the aware policy to look better shrinks and shifts unpredictably with composition,
+instead of tracking the shift cleanly the way `ceil`'s grid does.
+
 ---
 
 ## How this maps to the report
