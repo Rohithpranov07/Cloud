@@ -14,3 +14,7 @@ data/*.json
 
 # SAM CLI build output (sam build); never committed.
 .aws-sam/
+
+# Live-run outputs (T13.1): never committed, directory kept.
+data/live/*
+!data/live/.gitkeep
