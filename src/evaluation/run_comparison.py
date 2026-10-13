@@ -21,13 +21,8 @@ Every Phase 1-6 function is imported and called, never reimplemented.
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
-import matplotlib
-
-matplotlib.use("Agg")  # headless: the evaluation writes files, it never opens a window
-
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score
@@ -46,7 +41,7 @@ from src.controller.archetype_aware_policy import archetype_aware_scaling_decisi
 from src.controller.baseline_policy import BASELINE_POOL, baseline_scaling_decision
 from src.cost_governance.budget_projector import check_budget, project_spend
 from src.evaluation.latency_model import ARRIVAL_SEED, simulate_policy_latency, summarise_latency
-from src.feedback.recalibration import recalibrate
+from src.feedback.recalibration import recalibrate as recalibrate_classifier
 from src.forecaster.per_archetype_forecaster import forecast_aggregate, forecast_all_archetypes
 from src.trace_gen.generator import TraceConfig, _default_config, generate_trace
 
@@ -91,8 +86,26 @@ def _blended_unit_cost(per_unit_capacity: int) -> float:
     return cost_per_request * per_unit_capacity
 
 
+def _pyplot() -> Any:
+    """Import matplotlib only when plotting.
+
+    Keeping it out of module import lets the live controller import
+    ``_blended_unit_cost`` from here inside a Lambda image without matplotlib.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")  # headless: the evaluation writes files, it never opens a window
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 def simulate(
-    cfg: TraceConfig, sizing: str = "round", *, classifier_seed: int | None = None
+    cfg: TraceConfig,
+    sizing: str = "round",
+    *,
+    classifier_seed: int | None = None,
+    recalibrate: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run both policies over one trace with one sizing rule. No file I/O.
 
@@ -104,6 +117,10 @@ def simulate(
     it defaults to ``cfg.seed``, reproducing the original behaviour exactly. The 30-seed
     evaluation passes it explicitly so the classifier's own randomness stays fixed while
     only the trace seed varies across runs.
+
+    ``recalibrate`` is a keyword-only T12.4 addition: ``False`` skips the Phase 6
+    re-fits, matching the live system, where recalibration is not deployed (Addendum
+    §11.1). The default reproduces the original behaviour exactly.
     """
     start_minute = int(EVALUATION_DEFAULTS["start_minute"])
     horizon = int(EVALUATION_DEFAULTS["forecast_horizon"])
@@ -130,11 +147,11 @@ def simulate(
         minutes_remaining = cfg.duration_minutes - minute
 
         # Phase 6: recalibrate on an expanding window, logging before/after accuracy.
-        if minute > start_minute and (minute - start_minute) % recalibrate_every == 0:
+        if recalibrate and minute > start_minute and (minute - start_minute) % recalibrate_every == 0:
             accuracy_before = float(
                 accuracy_score(window["true_archetype"], classify(window, clf)["predicted_archetype"])
             )
-            clf = recalibrate(window, seed=classifier_seed)
+            clf = recalibrate_classifier(window, seed=classifier_seed)
             accuracy_after = float(
                 accuracy_score(window["true_archetype"], classify(window, clf)["predicted_archetype"])
             )
@@ -254,6 +271,7 @@ def run() -> None:
 
 def _plot(results: pd.DataFrame, cfg: TraceConfig, budget: float) -> None:
     """Write ``data/capacity_comparison.png``: baseline vs. aware capacity over time."""
+    plt = _pyplot()
     shift_end = cfg.shift_start_min + cfg.shift_duration_min
     fig, (ax_capacity, ax_spend) = plt.subplots(
         2, 1, figsize=(12, 8), sharex=True, gridspec_kw={"height_ratios": [3, 2]}
@@ -380,6 +398,7 @@ def _plot_latency(per_request_by_sizing: dict[str, dict[str, pd.DataFrame]], cfg
     shift_end = shift_start + cfg.shift_duration_min
     colours = {"baseline": "#64748b", "aware": "#dc2626"}
 
+    plt = _pyplot()
     fig, axes = plt.subplots(2, len(SIZING_RULES), figsize=(13, 9), squeeze=False)
 
     for col, sizing in enumerate(SIZING_RULES):
