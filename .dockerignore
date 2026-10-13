@@ -1,0 +1,7 @@
+# Build context is the repo root, but the image only needs src/, configs/ and cloud/.
+*
+!src/
+!configs/
+!cloud/
+**/__pycache__
+**/*.py[cod]

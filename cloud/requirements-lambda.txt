@@ -1,0 +1,12 @@
+# Runtime dependencies baked into the router/controller Lambda image (Addendum §11.2).
+# These pins MUST match requirements.txt (and boto3 MUST match requirements-cloud.txt)
+# exactly — tests/cloud/test_build_model.py enforces it. No matplotlib, pytest or mypy:
+# the image runs inference and control logic only. joblib (model persistence) arrives
+# as a scikit-learn dependency.
+numpy==2.5.2
+pandas==3.0.5
+scipy==1.18.1
+scikit-learn==1.9.0
+statsmodels==0.14.6
+PyYAML==6.0.3
+boto3==1.43.112
