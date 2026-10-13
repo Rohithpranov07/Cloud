@@ -1,0 +1,466 @@
+# Semantic Autoscaling — live control plane (TRD-AWS-Addendum §11.5).
+# The ONLY place infrastructure is defined. Region ap-south-1, arm64 everywhere,
+# every taggable resource tagged project=semantic-autoscaling, on-demand pricing only
+# (no provisioned capacity, no reserved concurrency, no GPU/SageMaker/EKS/NAT — rule C2).
+#
+# Docs checked before writing (rule A1):
+#   AWS::Serverless::Function (PackageType Image, ImageConfig, Metadata, Architectures, Tags, PropagateTags):
+#     https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+#   Image build Metadata (Dockerfile relative to DockerContext; DockerContext relative to this template):
+#     https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-using-build.html
+#   AWS::Serverless::HttpApi (Tags, DefaultRouteSettings, StageName $default, Ref = API id):
+#     https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-httpapi.html
+#   HttpApi event (ApiId, Method, Path, PayloadFormatVersion default 2.0):
+#     https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-function-httpapi.html
+#   ScheduleV2 event (ScheduleExpression, State DISABLED|ENABLED, Input):
+#     https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-function-schedulev2.html
+#   SAM policy templates (DynamoDBReadPolicy/WritePolicy, SQSSendMessagePolicy, SQSPollerPolicy, SNSPublishMessagePolicy):
+#     https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-policy-template-list.html
+#   AWS::Lambda::EventSourceMapping (BatchSize, FunctionResponseTypes, ScalingConfig, Tags; Ref = UUID; GetAtt EventSourceMappingArn):
+#     https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-lambda-eventsourcemapping.html
+#   lambda:UpdateEventSourceMapping scoped to an event-source-mapping ARN (AWS sample policy):
+#     https://docs.aws.amazon.com/r53recovery/latest/dg/security_iam_region_switch_lambda_esm.html
+#   AWS::SQS::Queue (VisibilityTimeout 0..43200; Ref = URL; GetAtt Arn, QueueName):
+#     https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-sqs-queue.html
+#   AWS::DynamoDB::Table (BillingMode PAY_PER_REQUEST, TimeToLiveSpecification; Ref = table name):
+#     https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-dynamodb-table.html
+#   AWS::SNS::Topic (Ref = ARN; GetAtt TopicName). Inline Subscription is NOT deleted with the
+#   topic, so the email subscription is a separate AWS::SNS::Subscription (deleted with the stack):
+#     https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-sns-topic.html
+#     https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-sns-subscription.html
+#   AWS::CloudWatch::Dashboard body (metric widgets, SEARCH expressions, stacked):
+#     https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/CloudWatch-Dashboard-Body-Structure.html
+
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Semantic autoscaling live control plane (router, controller, 5 emulated serving pools).
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email for the one-per-run budget-breach notification. Pass at deploy time; never commit it.
+    AllowedPattern: "[^@\\s]+@[^@\\s]+\\.[^@\\s]+"
+  TimeScale:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: Divides arrival and service times (frozen in T13.2 from the measured actuation lag).
+  SlotsPerUnit:
+    Type: Number
+    Default: 2
+    MinValue: 2
+    Description: Concurrent slots per capacity unit (Addendum §9.1; the ESM MaximumConcurrency floor is 2).
+  EnforceGovernance:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Whether a throttle budget action actually defers batch_offline requests (T12.8).
+
+Globals:
+  Function:
+    Architectures: [arm64]
+    Tags:
+      project: semantic-autoscaling
+    PropagateTags: true
+    Environment:
+      Variables:
+        TIME_SCALE: !Ref TimeScale
+        SLOTS_PER_UNIT: !Ref SlotsPerUnit
+        ENFORCE_GOVERNANCE: !Ref EnforceGovernance
+        COUNTS_TABLE: !Ref CountsTable
+        DECISIONS_TABLE: !Ref DecisionsTable
+        RESULTS_TABLE: !Ref ResultsTable
+        QUEUE_URL_BEDROCK_ON_DEMAND: !Ref BedrockOnDemandQueue
+        QUEUE_URL_SAGEMAKER_ENDPOINT: !Ref SagemakerEndpointQueue
+        QUEUE_URL_EKS_GPU_RESERVED: !Ref EksGpuReservedQueue
+        QUEUE_URL_EKS_GPU_SPOT: !Ref EksGpuSpotQueue
+        QUEUE_URL_HOMOGENEOUS_POOL: !Ref HomogeneousPoolQueue
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Ingress: HTTP API -> router (container image: classify, count, enqueue)
+  # ---------------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Tags:
+        project: semantic-autoscaling
+      PropagateTags: true
+      # Cost guard while the API is public: the replay peaks near 50 req/min x K <= 6,
+      # i.e. ~5 req/s, so this never limits the experiment but caps accidental floods.
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 50
+        ThrottlingBurstLimit: 100
+
+  RouterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-router
+      PackageType: Image
+      MemorySize: 1024
+      Timeout: 10
+      Environment:
+        Variables:
+          ESM_UUID_BEDROCK_ON_DEMAND: !Ref BedrockOnDemandMapping
+          ESM_UUID_SAGEMAKER_ENDPOINT: !Ref SagemakerEndpointMapping
+          ESM_UUID_EKS_GPU_RESERVED: !Ref EksGpuReservedMapping
+          ESM_UUID_EKS_GPU_SPOT: !Ref EksGpuSpotMapping
+          ESM_UUID_HOMOGENEOUS_POOL: !Ref HomogeneousPoolMapping
+      Policies:
+        - DynamoDBWritePolicy: {TableName: !Ref CountsTable}
+        - SQSSendMessagePolicy: {QueueName: !GetAtt BedrockOnDemandQueue.QueueName}
+        - SQSSendMessagePolicy: {QueueName: !GetAtt SagemakerEndpointQueue.QueueName}
+        - SQSSendMessagePolicy: {QueueName: !GetAtt EksGpuReservedQueue.QueueName}
+        - SQSSendMessagePolicy: {QueueName: !GetAtt EksGpuSpotQueue.QueueName}
+        - SQSSendMessagePolicy: {QueueName: !GetAtt HomogeneousPoolQueue.QueueName}
+      Events:
+        Classify:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /classify
+            PayloadFormatVersion: "2.0"
+    Metadata:
+      Dockerfile: cloud/Dockerfile
+      DockerContext: ..
+      DockerTag: python3.14-v1
+
+  # ---------------------------------------------------------------------------
+  # Controller (same image, different command): forecast, decide, actuate, govern.
+  # No API route: only the replay driver (IAM) invokes it.
+  # ---------------------------------------------------------------------------
+  ControllerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-controller
+      PackageType: Image
+      ImageConfig:
+        Command: ["cloud.handlers.controller.handler"]
+      MemorySize: 1024
+      Timeout: 60
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref AlertTopic
+          ESM_UUID_BEDROCK_ON_DEMAND: !Ref BedrockOnDemandMapping
+          ESM_UUID_SAGEMAKER_ENDPOINT: !Ref SagemakerEndpointMapping
+          ESM_UUID_EKS_GPU_RESERVED: !Ref EksGpuReservedMapping
+          ESM_UUID_EKS_GPU_SPOT: !Ref EksGpuSpotMapping
+          ESM_UUID_HOMOGENEOUS_POOL: !Ref HomogeneousPoolMapping
+      Policies:
+        - DynamoDBReadPolicy: {TableName: !Ref DecisionsTable}
+        - DynamoDBWritePolicy: {TableName: !Ref DecisionsTable}
+        - DynamoDBReadPolicy: {TableName: !Ref CountsTable}
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt AlertTopic.TopicName}
+        # No SAM policy template covers this action; scoped to the five mappings only.
+        - Statement:
+            - Effect: Allow
+              Action: lambda:UpdateEventSourceMapping
+              Resource:
+                - !GetAtt BedrockOnDemandMapping.EventSourceMappingArn
+                - !GetAtt SagemakerEndpointMapping.EventSourceMappingArn
+                - !GetAtt EksGpuReservedMapping.EventSourceMappingArn
+                - !GetAtt EksGpuSpotMapping.EventSourceMappingArn
+                - !GetAtt HomogeneousPoolMapping.EventSourceMappingArn
+      Events:
+        # Optional "live mode" (the controller ticking itself every minute). Declared but
+        # DISABLED: experiment runs are ticked synchronously by the replay driver.
+        LiveTick:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 minute)
+            State: DISABLED
+            Input: '{"warmup": true}'
+    Metadata:
+      Dockerfile: cloud/Dockerfile
+      DockerContext: ..
+      DockerTag: python3.14-v1
+
+  # ---------------------------------------------------------------------------
+  # Five emulated serving pools: queue + worker (zip, stdlib + boto3) + mapping.
+  #
+  # Worker timeout = ceil(max service_s) + 10. max service_s on the seed-42 trace is
+  # 19.4722 s (request 5505, agentic_tool_using), so ceil(19.4722) + 10 = 30 s.
+  # Visibility timeout = 6 x 30 = 180 s, so a slow worker never lets its message
+  # reappear and be processed twice.
+  # Every mapping starts at BatchSize 1 and MaximumConcurrency 2 (one unit x 2 slots);
+  # the controller changes MaximumConcurrency at runtime. No reserved concurrency.
+  # ---------------------------------------------------------------------------
+  BedrockOnDemandQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: semauto-bedrock_on_demand
+      VisibilityTimeout: 180
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+  BedrockOnDemandWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-worker-bedrock_on_demand
+      Runtime: python3.14
+      Handler: worker.handler
+      CodeUri: handlers/
+      MemorySize: 128
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy: {TableName: !Ref ResultsTable}
+        - SQSPollerPolicy: {QueueName: !GetAtt BedrockOnDemandQueue.QueueName}
+  BedrockOnDemandMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt BedrockOnDemandQueue.Arn
+      FunctionName: !Ref BedrockOnDemandWorker
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig: {MaximumConcurrency: 2}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  SagemakerEndpointQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: semauto-sagemaker_endpoint
+      VisibilityTimeout: 180
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+  SagemakerEndpointWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-worker-sagemaker_endpoint
+      Runtime: python3.14
+      Handler: worker.handler
+      CodeUri: handlers/
+      MemorySize: 128
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy: {TableName: !Ref ResultsTable}
+        - SQSPollerPolicy: {QueueName: !GetAtt SagemakerEndpointQueue.QueueName}
+  SagemakerEndpointMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt SagemakerEndpointQueue.Arn
+      FunctionName: !Ref SagemakerEndpointWorker
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig: {MaximumConcurrency: 2}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  EksGpuReservedQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: semauto-eks_gpu_reserved
+      VisibilityTimeout: 180
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+  EksGpuReservedWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-worker-eks_gpu_reserved
+      Runtime: python3.14
+      Handler: worker.handler
+      CodeUri: handlers/
+      MemorySize: 128
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy: {TableName: !Ref ResultsTable}
+        - SQSPollerPolicy: {QueueName: !GetAtt EksGpuReservedQueue.QueueName}
+  EksGpuReservedMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt EksGpuReservedQueue.Arn
+      FunctionName: !Ref EksGpuReservedWorker
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig: {MaximumConcurrency: 2}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  EksGpuSpotQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: semauto-eks_gpu_spot
+      VisibilityTimeout: 180
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+  EksGpuSpotWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-worker-eks_gpu_spot
+      Runtime: python3.14
+      Handler: worker.handler
+      CodeUri: handlers/
+      MemorySize: 128
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy: {TableName: !Ref ResultsTable}
+        - SQSPollerPolicy: {QueueName: !GetAtt EksGpuSpotQueue.QueueName}
+  EksGpuSpotMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt EksGpuSpotQueue.Arn
+      FunctionName: !Ref EksGpuSpotWorker
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig: {MaximumConcurrency: 2}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  HomogeneousPoolQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: semauto-homogeneous_pool
+      VisibilityTimeout: 180
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+  HomogeneousPoolWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: semauto-worker-homogeneous_pool
+      Runtime: python3.14
+      Handler: worker.handler
+      CodeUri: handlers/
+      MemorySize: 128
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy: {TableName: !Ref ResultsTable}
+        - SQSPollerPolicy: {QueueName: !GetAtt HomogeneousPoolQueue.QueueName}
+  HomogeneousPoolMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt HomogeneousPoolQueue.Arn
+      FunctionName: !Ref HomogeneousPoolWorker
+      BatchSize: 1
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig: {MaximumConcurrency: 2}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  # ---------------------------------------------------------------------------
+  # State (§11.3): on-demand tables, every item expires 7 days after it is written.
+  # ---------------------------------------------------------------------------
+  CountsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: semauto-counts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: run_id, AttributeType: S}
+        - {AttributeName: minute, AttributeType: "N"}
+      KeySchema:
+        - {AttributeName: run_id, KeyType: HASH}
+        - {AttributeName: minute, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  DecisionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: semauto-decisions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: run_id, AttributeType: S}
+        - {AttributeName: minute, AttributeType: "N"}
+      KeySchema:
+        - {AttributeName: run_id, KeyType: HASH}
+        - {AttributeName: minute, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: semauto-results
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: run_id, AttributeType: S}
+        - {AttributeName: request_id, AttributeType: "N"}
+      KeySchema:
+        - {AttributeName: run_id, KeyType: HASH}
+        - {AttributeName: request_id, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  # ---------------------------------------------------------------------------
+  # Governance notification: one SNS email per run on the first projected breach.
+  # ---------------------------------------------------------------------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: semauto-alerts
+      Tags: [{Key: project, Value: semantic-autoscaling}]
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ---------------------------------------------------------------------------
+  # Dashboard. SEARCH expressions pick up every run_id without hardcoding it.
+  # ---------------------------------------------------------------------------
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: semauto-live
+      DashboardBody: !Sub |
+        {
+          "start": "-PT3H",
+          "widgets": [
+            {"type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+             "properties": {"title": "Requests per predicted archetype (stacked)", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": true, "period": 60,
+               "metrics": [[{"expression": "SEARCH('{SemAuto,run_id,policy,predicted_archetype} MetricName=\"Requests\"', 'Sum', 60)", "id": "e1"}]]}},
+            {"type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+             "properties": {"title": "Forecast peak per archetype (req/min)", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": false, "period": 60,
+               "metrics": [[{"expression": "SEARCH('{SemAuto,run_id,policy,archetype} MetricName=\"ForecastPeak\"', 'Maximum', 60)", "id": "e1"}]]}},
+            {"type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+             "properties": {"title": "Capacity units per pool", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": false, "period": 60,
+               "metrics": [[{"expression": "SEARCH('{SemAuto,run_id,policy,pool} MetricName=\"Units\"', 'Maximum', 60)", "id": "e1"}]]}},
+            {"type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+             "properties": {"title": "Projected end-of-window spend vs budget (simulated $)", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": false, "period": 60,
+               "metrics": [[{"expression": "SEARCH('{SemAuto,run_id,policy} MetricName=\"ProjectedSpend\"', 'Maximum', 60)", "id": "e1"}],
+                           [{"expression": "SEARCH('{SemAuto,run_id,policy} MetricName=\"Budget\"', 'Maximum', 60)", "id": "e2"}]]}},
+            {"type": "metric", "x": 0, "y": 12, "width": 12, "height": 6,
+             "properties": {"title": "Queue depth (ApproximateNumberOfMessagesVisible)", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": false, "period": 60, "stat": "Maximum",
+               "metrics": [["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${BedrockOnDemandQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${SagemakerEndpointQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${EksGpuReservedQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${EksGpuSpotQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${HomogeneousPoolQueue.QueueName}"]]}},
+            {"type": "metric", "x": 12, "y": 12, "width": 12, "height": 6,
+             "properties": {"title": "Oldest message age (ApproximateAgeOfOldestMessage, s)", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": false, "period": 60, "stat": "Maximum",
+               "metrics": [["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${BedrockOnDemandQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${SagemakerEndpointQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${EksGpuReservedQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${EksGpuSpotQueue.QueueName}"],
+                           ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${HomogeneousPoolQueue.QueueName}"]]}},
+            {"type": "metric", "x": 0, "y": 18, "width": 24, "height": 6,
+             "properties": {"title": "Worker ConcurrentExecutions (busy slots per pool)", "region": "${AWS::Region}",
+               "view": "timeSeries", "stacked": false, "period": 60, "stat": "Maximum",
+               "metrics": [["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${BedrockOnDemandWorker}"],
+                           ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${SagemakerEndpointWorker}"],
+                           ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${EksGpuReservedWorker}"],
+                           ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${EksGpuSpotWorker}"],
+                           ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${HomogeneousPoolWorker}"]]}}
+          ]
+        }
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the HTTP API ($default stage). The router listens on POST /classify.
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  ControllerFunctionName:
+    Value: !Ref ControllerFunction
+  BedrockOnDemandQueueUrl:
+    Value: !Ref BedrockOnDemandQueue
+  SagemakerEndpointQueueUrl:
+    Value: !Ref SagemakerEndpointQueue
+  EksGpuReservedQueueUrl:
+    Value: !Ref EksGpuReservedQueue
+  EksGpuSpotQueueUrl:
+    Value: !Ref EksGpuSpotQueue
+  HomogeneousPoolQueueUrl:
+    Value: !Ref HomogeneousPoolQueue
+  CountsTableName:
+    Value: !Ref CountsTable
+  DecisionsTableName:
+    Value: !Ref DecisionsTable
+  ResultsTableName:
+    Value: !Ref ResultsTable

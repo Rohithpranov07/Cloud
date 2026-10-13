@@ -11,3 +11,6 @@ data/*.png
 data/*.json
 !data/.gitkeep
 !tests/golden/evaluation_results_round.csv
+
+# SAM CLI build output (sam build); never committed.
+.aws-sam/

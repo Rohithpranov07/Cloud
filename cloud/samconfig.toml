@@ -1,0 +1,23 @@
+# SAM CLI configuration (Addendum §11.2). Format:
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-config.html
+#
+# NO SECRETS HERE (NFR-A6). The AlertEmail parameter is passed on the command line at
+# deploy time (--parameter-overrides AlertEmail=...). If `sam deploy --guided` offers to
+# save arguments, decline, or check this file before committing so the email never
+# lands in parameter_overrides.
+version = 0.1
+
+[default.global.parameters]
+stack_name = "semauto-live"
+region = "ap-south-1"
+profile = "semauto"
+
+[default.build.parameters]
+template_file = "template.yaml"
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+resolve_image_repos = true
+tags = "project=\"semantic-autoscaling\""
