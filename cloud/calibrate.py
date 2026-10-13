@@ -179,10 +179,25 @@ def preload_messages(sqs: Any, queue_url: str, run_id: str, rep: int, now: Calla
 
 
 def wait_until_enabled(lam: Any, mapping_uuid: str, expected: int, *, timeout_s: float = 90.0,
-                       sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> None:
+                       sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
+                       max_transient: int = 3) -> None:
+    """Poll until the mapping is Enabled at ``expected``. A read-only ``get`` that times out on the
+    network is retried (logged, at most ``max_transient`` times in total); anything else propagates."""
+    from botocore.exceptions import ConnectionError as BotoConnectionError
+    from botocore.exceptions import ReadTimeoutError
+
     deadline = clock() + timeout_s
+    transient = 0
     while clock() < deadline:
-        mapping = lam.get_event_source_mapping(UUID=mapping_uuid)
+        try:
+            mapping = lam.get_event_source_mapping(UUID=mapping_uuid)
+        except (ReadTimeoutError, BotoConnectionError) as exc:
+            transient += 1
+            logging.warning("transient error polling mapping (%d/%d): %s", transient, max_transient, type(exc).__name__)
+            if transient > max_transient:
+                raise
+            sleep(2.0)
+            continue
         if mapping["State"] == "Enabled" and mapping["ScalingConfig"]["MaximumConcurrency"] == expected:
             return
         sleep(2.0)

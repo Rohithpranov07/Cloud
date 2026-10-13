@@ -242,3 +242,21 @@ def test_report_chooses_k_and_fails_closed_when_a_rep_never_reaches_eight() -> N
     bad = calibrate.calibration_report([rep(4.0), rep(None), rep(3.5)], probes, [20.0], 1.0)
     assert bad["actuation_lag_to_8_s"]["reps_that_never_reached_8"] == 1 and bad["chosen_time_scale"] is None
     assert good["k_thresholds_s"]["1"] == 15.0 and good["k_thresholds_s"]["6"] == 2.5
+
+
+def test_wait_until_enabled_retries_transient_timeouts_but_not_forever() -> None:
+    from botocore.exceptions import ReadTimeoutError
+
+    class Flaky:
+        def __init__(self, failures: int) -> None:
+            self.failures = failures
+
+        def get_event_source_mapping(self, UUID: str) -> dict:
+            if self.failures:
+                self.failures -= 1
+                raise ReadTimeoutError(endpoint_url="https://lambda.example")
+            return {"State": "Enabled", "ScalingConfig": {"MaximumConcurrency": 2}}
+
+    calibrate.wait_until_enabled(Flaky(2), "u", 2, sleep=lambda s: None)  # recovers after two timeouts
+    with pytest.raises(ReadTimeoutError):
+        calibrate.wait_until_enabled(Flaky(10), "u", 2, sleep=lambda s: None)  # gives up visibly
