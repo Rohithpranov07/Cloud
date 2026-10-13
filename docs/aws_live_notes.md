@@ -316,3 +316,96 @@ exceeded"). Recovery:
 image (numpy, pandas, scipy, scikit-learn, statsmodels) plus build layers. Check
 `df -h /System/Volumes/Data` before T12.1, and run `docker system prune` after builds if
 space gets low.
+
+---
+
+## T12.6 — First deploy + smoke tests (2026-10-13)
+
+Stack `semauto-live` in `ap-south-1`, deployed by the user from their own terminal with
+`sam build` + `sam deploy --parameter-overrides AlertEmail=<redacted>` (interactive change-set
+review). Preconditions checked read-only first: rule C1 (budget `semauto` $5.00 exists, healthy);
+Lambda concurrency quota **10** (request `d1e50a11...Srii4` still `CASE_OPENED`, not yet approved —
+enough for single-request smoke tests, **not** for Phase 13).
+
+### Stack outputs (account ID redacted)
+
+| Output | Value |
+|---|---|
+| ApiUrl | `https://<api-id>.execute-api.ap-south-1.amazonaws.com` (route `POST /classify`) |
+| ControllerFunctionName | `semauto-controller` |
+| Queues | `https://sqs.ap-south-1.amazonaws.com/<ACCOUNT>/semauto-{bedrock_on_demand,sagemaker_endpoint,eks_gpu_reserved,eks_gpu_spot,homogeneous_pool}` |
+| Tables | `semauto-counts`, `semauto-decisions`, `semauto-results` |
+
+Verified against the template (read-only): `CREATE_COMPLETE`, 33 resources (8 IAM roles, 7 functions,
+5 queues, 5 mappings, 3 tables, schedule, topic, subscription, dashboard, API + stage, permission). No
+EC2/SageMaker/EKS. 2 image functions (1024 MB; 10 s / 60 s) + 5 zip workers (128 MB, 30 s), all arm64.
+Every mapping: `BatchSize 1`, `MaximumConcurrency 2`, `ReportBatchItemFailures`. Schedule `DISABLED`.
+Email subscription confirmed.
+
+The deploy also creates two stacks outside `semauto-live`: `semauto-live-<hash>-CompanionStack` (two
+ECR repos, ~330 MB image) and the shared `aws-sam-cli-managed-default` (S3 upload bucket). **Teardown
+(T14.1) must delete all three**, not just `semauto-live`.
+
+### Smoke tests
+
+**(a) `POST /classify`**, one correctly-classified agentic request from the seed-42 trace (id 5, run
+`smoke-api`):
+```
+HTTP 202  {"request_id": 5, "predicted_archetype": "agentic_tool_using",
+           "confidence": 0.9739, "pool": "eks_gpu_reserved"}
+```
+The **first attempt returned HTTP 500 after 20.8 s** (cold start, see below); the retry returned 202.
+
+**(b) counter written** — `semauto-counts[smoke-api, 0]`: `agentic_tool_using = 1`.
+
+**(c) worker result** — `semauto-results[smoke-api, 5]`: `service_s 10.765728`, slot held
+`end_ts - start_ts = 10.766 s` (exact), `start_ts - ingress_ts = 2.132 s` (SQS polling + worker
+cold start; real infrastructure delay the simulation does not model), response `12.898 s`.
+
+**(d) controller, live actuation.** At the task's literal minute 10 every pool is at 1 unit
+(= concurrency 2 = the reset value), so a tick there cannot change anything; verified locally with
+`simulate(recalibrate=False)`. The first minute that moves a pool is **70** (aware/ceil:
+`eks_gpu_reserved` 1 -> 2 units). So run `smoke-ctl` was seeded with the real per-minute counts for
+minutes 0-70 (71 items, 3,512 requests) and ticked at minute 70:
+```
+changes: {"eks_gpu_reserved": 4}   capacity: bedrock 1, sagemaker 1, eks_gpu_reserved 2, eks_gpu_spot 1
+projected_spend 14.79   budget_action none   breach_projected false   notified false
+```
+`aws lambda get-event-source-mapping` then reported `State Updating` -> `Enabled` with
+`MaximumConcurrency 4` for `eks_gpu_reserved` (5-10 s later); the other four pools stayed at 2.
+This matches the offline parity test's prediction. The recorded `semauto-decisions` item carries every
+§11.3 field; the agentic forecast peak was 10.80 req/min (> 10 = one unit, hence 2 units under `ceil`).
+`{"reset": ...}` then returned every pool to 2 (verified).
+
+**(e) cold starts.** Router (1024 MB, arm64, container image):
+
+| Case | Result |
+|---|---|
+| Cold start #1 | init hit Lambda's 10 s init-phase limit (`INIT_REPORT Init Duration 9999.50 ms, Status timeout`), was retried inside the invocation and timed out again at the 10 s function limit: **HTTP 500 after 20.8 s**, max memory 177 MB |
+| Cold start #2 | **HTTP 202 after 18.1 s**: ~16.5 s from the first import log line to `START`, then 1.3 s in the handler. REPORT line carries no `Init Duration` field because init exceeded the limit |
+| Warm | handler **14-52 ms**; **0.18-0.27 s** end to end from the user's laptop |
+
+Controller (1024 MB, heavier imports incl. statsmodels): `{"warmup": true}` cold = **33 s** (function
+timeout is 60 s, so it succeeds); the following warm tick took 3 s end to end.
+
+### Consequence for Phase 13 — needs a decision before T13.1
+
+A router container that starts cold takes ~17-21 s to become ready, which exceeds the router's 10 s
+timeout (Addendum §11.5 fixes 1024 MB / 10 s). Any live request that lands on a cold container returns
+HTTP 500, and the §13 live-run gate is **zero lost requests**. Warm containers are fine (milliseconds).
+Mitigations, none applied yet:
+1. **Pre-warm** the router in T13.1 with several concurrent dummy `POST /classify` calls (they return
+   400 but initialise a container each), plus retry-on-5xx in the replay driver, logged and reported.
+   Within the spec; no template change. The router needs well under one concurrent container at the
+   experiment's ~5 req/s peak, so a handful of warm containers is ample.
+2. Raise router memory (Lambda CPU scales with memory; init is CPU/IO-bound). Deviates from §11.5.
+3. Not available: provisioned concurrency (rule C2), SnapStart (not supported for container images).
+
+Also for T13.2: ESM concurrency changes took 5-10 s to apply, and the first worker poll took 2.1 s.
+
+### Decisions
+
+- Smoke-test run IDs `smoke-api`, `smoke-warm`, `smoke-ctl` leave small rows in the tables
+  (TTL 7 days); teardown deletes the tables.
+- Spend after deploy and all smoke tests: **$0.00** on the budget page (billing data lags up to ~24 h);
+  the stack idles at ~$0.002/day (ECR storage). Total so far is far below the user's USD 2 ceiling.
