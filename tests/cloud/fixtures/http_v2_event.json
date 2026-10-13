@@ -1,0 +1,29 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /classify",
+  "rawPath": "/classify",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "local",
+    "domainName": "local.execute-api.ap-south-1.amazonaws.com",
+    "domainPrefix": "local",
+    "http": {
+      "method": "POST",
+      "path": "/classify",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "192.0.2.1",
+      "userAgent": "replay"
+    },
+    "requestId": "local-request",
+    "routeKey": "POST /classify",
+    "stage": "$default",
+    "time": "13/Oct/2026:00:00:00 +0000",
+    "timeEpoch": 1791849600000
+  },
+  "body": "{\"run_id\": \"aware-ceil-20261013000000\", \"policy\": \"aware\", \"request_id\": 4, \"minute\": 0, \"declared_output_len\": 215.87577736153963, \"has_tool_schema\": 1, \"prompt_domain_score\": 0.3954441809425155, \"service_s\": 15.261661003941814, \"true_archetype\": \"agentic_tool_using\"}",
+  "isBase64Encoded": false
+}
