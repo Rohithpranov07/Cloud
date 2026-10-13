@@ -345,7 +345,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     probe_body = {k: v for k, v in json.loads(template["body"]).items()}
     probes = run_router_probes(post=post, ddb=ddb, results_table=stack.tables["results"], skew_s=skew, template=probe_body)
 
-    # 1: actuation lag, repeated.
+    # 1: actuation lag, repeated. A new client: the one above sat idle through the probes and its pooled
+    # connection was silently dropped (both first attempts hung 125 s on the first call).
+    lam = session.client("lambda", config=Config(read_timeout=125, retries={"total_max_attempts": 1}))
     actuation: list[dict[str, Any]] = []
     try:
         for rep in range(1, args.reps + 1):
