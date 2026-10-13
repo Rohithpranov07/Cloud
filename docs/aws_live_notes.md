@@ -409,3 +409,63 @@ Also for T13.2: ESM concurrency changes took 5-10 s to apply, and the first work
   (TTL 7 days); teardown deletes the tables.
 - Spend after deploy and all smoke tests: **$0.00** on the budget page (billing data lags up to ~24 h);
   the stack idles at ~$0.002/day (ECR storage). Total so far is far below the user's USD 2 ceiling.
+
+---
+
+## Phase 13 — preparation (2026-10-14)
+
+**Decision (user, 2026-10-14): keep the `semauto-live` stack up for Phase 13** instead of tearing
+it down after T12.6 (rule C3 exception, logged here). Idle cost is ~$0.002/day (ECR storage); the
+three stacks (`semauto-live`, its `CompanionStack`, `aws-sam-cli-managed-default`) must still all be
+deleted in T14.1.
+
+### Built and tested offline (no AWS, $0)
+
+| Task | File | Offline status |
+|---|---|---|
+| T13.1 | `cloud/replay.py` | 31 tests; `--dry-run` verified; schedule equals `simulate()`'s inputs bit for bit |
+| T13.2 | `cloud/calibrate.py` | 28 tests; measurement recovers a simulated actuation lag exactly; K rule checked at every boundary. **Live measurement not yet run** |
+| T13.4 | `cloud/analyze_live.py` | 12 tests on a synthetic run with a known 0.6 s shift; README "Live AWS results" waits for real data |
+
+Two rule corrections, both from reading the docs: after a queue purge the driver waits **60 s**, not
+the 30 s in the task text (SQS `PurgeQueue` docs: deletion takes up to 60 s, wait 60 s); and Lambda
+invokes use `total_max_attempts=1` so a slow controller tick can never run twice.
+
+### Why the full rate cannot run on this account (quota still 10)
+
+`NFR-A3` wants a Lambda concurrency quota >= 50; it is **10** (request `d1e50a11...Srii4` is
+`CASE_OPENED`; the Support API is not available on the Basic plan, so only the console's Support
+Center shows AWS's reply). Peak slots in use at once, from the simulator
+(`simulate(recalibrate=False)`, K does not change this because arrivals and service times scale together):
+
+| trace rate | sizing | policy | cap slots (peak) | busy slots (peak) |
+|---|---|---|---|---|
+| 50 | round | aware / baseline | 10 / 6 | 10 / 6 |
+| 50 | ceil | aware / baseline | 12 / 6 | 12 / 6 |
+| 25 | round | aware / baseline | 8 / 2 | 8 / 2 |
+| 25 | ceil | aware / baseline | 10 / 4 | 8 / 4 |
+
+At 50 req/min the aware policy alone needs 10-12 workers at once before counting the router and
+controller, which exceeds 10 and would throttle (lost requests). At **25 req/min** it needs 8, so the
+documented T11.1 fallback (`base_rate_per_min` halved to 25 for the simulation AND the live run,
+everything else unchanged) fits, tightly: ~8 busy workers + the router + a controller tick = ~10.
+
+The budget stays at 24.0 under the fallback ("everything else unchanged"); scaling it to 12 would make
+the aware policy breach at minute 10 because its one-unit-per-pool floor keeps spend near 0.2/min
+regardless of rate. Simulated first projected breach at budget 24 / rate 25: aware+ceil minute 88,
+aware+round none, baseline none (own-spend definition).
+
+The fallback needs a pre-agreed rate in the **simulation** too (T10.3 re-run at 25): `replay` and
+`analyze_live` already take the rate from the run's own metadata, and `analyze_live` simulates at it.
+One known mismatch to report: the live router's classifier was trained at image-build time on the
+rate-50 seed-42 trace, while a rate-25 simulation trains its own; `analyze_live` therefore routes the
+simulation by the LIVE predictions, which removes the effect from the live-vs-sim comparison.
+
+### Cost check for the live runs (rule C1 / the user's USD 2 ceiling)
+
+Per run (~3,000 requests at rate 25): worker ~3,300 GB-s + router ~90 + controller ~220 GB-s, i.e.
+~3,600 GB-s (free tier 400,000 GB-s/month); ~6,000 DynamoDB writes and ~20,000 read units
+(on-demand, ~$0.01 a run); SQS/API Gateway far inside the free tiers. Custom metrics: CloudWatch
+pricing (aws.amazon.com/cloudwatch/pricing) says they are *"prorated by the hour"* and charged only
+in hours when data is sent, $0.30 per metric-month, 10 free; each run adds ~14 metrics for 1-2 hours,
+i.e. cents. **Estimated Phase 13 total: well under $0.50**, versus the USD 2 ceiling.
