@@ -1,0 +1,6 @@
+# Local development dependencies for the cloud/ package (Phase 11-14).
+# Kept separate from requirements.txt so src/ never depends on boto3 (CLAUDE.md
+# Part 2 boundary). botocore, and its botocore.stub.Stubber used by tests/cloud/,
+# is installed as a boto3 dependency.
+# Latest boto3 on PyPI, checked 2026-10-13.
+boto3==1.43.112

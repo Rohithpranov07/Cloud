@@ -233,3 +233,86 @@ this are often auto-approved within minutes to a few hours, but not guaranteed.
   **USD 2 total**, confirmed 2026-10-13. This matches (doesn't tighten) the Build
   Instructions' own NFR-A1 estimate, but is treated as a hard stop: check Cost Explorer
   spend against it during Phase 13, not just the $5 budget's own alert thresholds.
+
+---
+
+## T11.2 — Toolchain: AWS CLI v2, SAM CLI, Docker (arm64)
+
+**Status: complete. AWS CLI, SAM CLI, Docker (arm64) and boto3 all verified. Docker
+Desktop crashed mid-task when the host disk filled; it was recovered after the user freed
+space (see "Docker Desktop — disk-space crash and recovery" below).**
+
+| Tool | Version | How installed |
+|---|---|---|
+| AWS CLI v2 | `aws-cli/2.37.13 Python/3.14.6 Darwin/25.2.0 exe/arm64` | pre-installed by the user (T11.1) |
+| AWS SAM CLI | `SAM CLI, version 1.168.0` | official AWS `.pkg`, current-user install, no sudo (see below) |
+| Docker Desktop | server arch `arm64` | pre-installed by the user |
+| boto3 | `1.43.112` (latest on PyPI, checked 2026-10-13) | `requirements-cloud.txt` → `.venv`; `botocore.stub.Stubber` imports |
+
+### SAM CLI — why the official package, not Homebrew
+
+Docs: [Install the AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) /
+[Managing AWS SAM CLI versions](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/manage-sam-cli-versions.html).
+
+1. First tried the documented community formula, `brew install aws-sam-cli`. It installed,
+   but `sam validate` didn't exist ("No such command 'validate'"). The formula runs on
+   Homebrew's `python@3.14`, which that same install upgraded to **3.14.8_2**. That
+   bottle's `pyexpat` links `/usr/lib/libexpat.1.dylib` and needs
+   `_XML_SetAllocTrackerActivationThreshold`, which macOS 26.2's system libexpat doesn't
+   export (the bottle targets a newer macOS). `brew update` showed no fixed rebuild yet.
+2. Uninstalled it and used AWS's recommended `.pkg` instead (it bundles its own Python):
+   downloaded `aws-sam-cli-macos-arm64.pkg`; checked with `pkgutil --check-signature`
+   (signed "Developer ID Installer: AMZN Mobile LLC (94KV3E626L)", notarized by Apple);
+   installed via the docs' "Command line – Current user" method to
+   `~/.local/share/aws-sam-cli`; symlinked into `~/.local/bin/sam` (already on PATH).
+   `sam validate --lint` works offline.
+
+### Project `.venv` — repaired after the same Homebrew upgrade
+
+The `.venv` was created on Homebrew Python **3.14.7**, but its interpreter symlink
+resolved through `/opt/homebrew/opt/python@3.14`, which now points at the broken
+3.14.8_2. Symptoms: `platform.mac_ver()` silently returned `''` (plistlib can't import
+pyexpat), so pip crashed in both `truststore` and its wheel-tag code. Fixed by pointing
+`.venv/bin/python3.14` and `pyvenv.cfg`'s `home` at the still-installed, healthy
+`/opt/homebrew/Cellar/python@3.14/3.14.7`. The original config is saved as
+`.venv/pyvenv.cfg.bak-3.14.8-breakage`. Tests (280 passed) and `mypy src/` are unaffected.
+
+**Fragile: don't run `brew cleanup` (or let it auto-run) while this workaround is in
+place.** It would delete the 3.14.7 keg that the venv now depends on. Durable fixes,
+whichever comes first: a Homebrew rebuild of `python@3.14` that works on macOS 26.2, or
+a macOS update. After either, recreate the venv normally.
+
+### Verify (real output, 2026-10-13)
+
+```
+$ aws --version
+aws-cli/2.37.13 Python/3.14.6 Darwin/25.2.0 exe/arm64
+$ sam --version
+SAM CLI, version 1.168.0
+$ docker version --format '{{.Server.Arch}}'
+arm64
+$ python -c "import boto3, botocore.stub; print(boto3.__version__)"
+1.43.112
+$ pytest -q
+280 passed
+$ mypy src/
+Success: no issues found in 21 source files
+```
+
+### Docker Desktop — disk-space crash and recovery
+
+Partway through this task the host data volume hit 99% (228 GiB total, 3.4 GiB free) and
+Docker Desktop's VM crashed: `write .../log/vm/console.log: no space left on device`. The
+backend then stuck in a `stopping` state that neither a GUI quit nor
+`docker desktop restart` could clear ("processes still running ... context deadline
+exceeded"). Recovery:
+
+1. The user freed space (to ~9.4 GiB free) and quit Docker Desktop.
+2. The leftover hung processes (`com.docker.backend` and the sandbox daemon) were
+   stopped. One needed SIGKILL after SIGTERM didn't end it.
+3. `docker desktop start` brought the engine back (`/_ping` → `OK`). `arm64` re-verified.
+
+**Disk headroom is still tight (~9 GiB free).** Phase 12 builds a ~1–1.5 GB arm64 Lambda
+image (numpy, pandas, scipy, scikit-learn, statsmodels) plus build layers. Check
+`df -h /System/Volumes/Data` before T12.1, and run `docker system prune` after builds if
+space gets low.
