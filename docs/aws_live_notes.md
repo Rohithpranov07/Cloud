@@ -469,3 +469,28 @@ Per run (~3,000 requests at rate 25): worker ~3,300 GB-s + router ~90 + controll
 pricing (aws.amazon.com/cloudwatch/pricing) says they are *"prorated by the hour"* and charged only
 in hours when data is sent, $0.30 per metric-month, 10 free; each run adds ~14 metrics for 1-2 hours,
 i.e. cents. **Estimated Phase 13 total: well under $0.50**, versus the USD 2 ceiling.
+
+## Phase 13 — T13.2 calibration (2026-10-14)
+
+Four attempts. Attempts 1–2 hung 125 s on the first Lambda call after the ~4 min router-probe phase
+(stale pooled connection; fixed by using a fresh client). Attempt 3 completed 5 reps but the final
+pool reset failed locally (errno 49), left one pool at 8 (restored by hand, verified Enabled/2) and the
+measurements were lost; fixed by persisting each rep and retrying the restore. Attempt 4 completed.
+No parameter was changed after seeing any result.
+
+| measure | p50 | p95 |
+|---|---|---|
+| actuation lag, 2 -> 8 (to reach 8 concurrent), n=5 | 17.9 s | 19.9 s |
+| actuation lag to first extra slot | 13.9 s | 15.5 s |
+| router overhead | 0.09 s | 0.29 s |
+| router round trip | 0.23 s | 0.71 s |
+| warm router Duration | 17.9 ms | 24.1 ms |
+| idle polling delay | 0.02 s | 0.04 s |
+
+Per-rep lag to 8: 18.4, 17.9, 14.8, 19.9, 15.8 s. Only rep 1 is clean (peak before the change 2.0);
+reps 2–5 had 8–9 concurrent invocations before the change, i.e. pollers from the previous rep's raised
+setting had not wound down, so they under-state or mis-state the lag. Rep 1 alone is 18.4 s.
+
+Rule: K = largest of {1,2,3,4,6} with p95 lag < 0.25*60/K (15 / 7.5 / 5 / 3.75 / 2.5 s).
+p95 = 19.9 s >= 15 s, so **no K qualifies; chosen_time_scale = null (exit 2)**. K is NOT chosen.
+Live runs are on hold pending a human decision.
