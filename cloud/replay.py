@@ -373,11 +373,30 @@ def resolve_stack(cfn: Any, stack_name: str) -> Stack:
     )
 
 
+def call_undelivered_retry(
+    fn: Callable[[], Any], *, attempts: int = 8, base_s: float = 3.0, max_wait_s: float = 20.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    """Call ``fn``, retrying ONLY errors that guarantee the request never reached AWS (DNS failure,
+    connect failure): a retried call can therefore never execute twice. A ReadTimeout is NOT retried
+    (the request may have run). Each retry is logged; the last error is re-raised."""
+    from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except (EndpointConnectionError, ConnectTimeoutError) as exc:
+            logger.warning("request not delivered (%d/%d): %s", attempt, attempts, type(exc).__name__)
+            if attempt == attempts:
+                raise
+            sleep(min(max_wait_s, base_s * attempt))
+
+
 def invoke_controller(lam: Any, function_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Synchronous (RequestResponse) invoke; returns the function's JSON plus StatusCode/FunctionError."""
-    response = lam.invoke(
+    response = call_undelivered_retry(lambda: lam.invoke(
         FunctionName=function_name, InvocationType="RequestResponse", Payload=json.dumps(payload).encode()
-    )
+    ))
     body = json.loads(response["Payload"].read() or b"{}")
     out: dict[str, Any] = dict(body) if isinstance(body, dict) else {"response": body}
     out["StatusCode"] = response["StatusCode"]
@@ -421,8 +440,17 @@ def wait_for_drain(
     """
     deadline = clock() + timeout_s
     stable = 0
+    from botocore.exceptions import ConnectionError as BotoConnectionError
+    from botocore.exceptions import ReadTimeoutError
+
     while clock() < deadline:
-        backlog = queue_backlog(sqs, queue_urls)
+        try:
+            backlog = queue_backlog(sqs, queue_urls)
+        except (BotoConnectionError, ReadTimeoutError) as exc:  # transient network loss: log, keep polling
+            logger.warning("drain poll failed (%s); retrying", type(exc).__name__)
+            stable = 0
+            sleep(poll_s)
+            continue
         stable = stable + 1 if not any(backlog.values()) else 0
         if stable >= stable_polls:
             return True
@@ -568,7 +596,7 @@ def live_run(args: argparse.Namespace, schedule: pd.DataFrame, run_id: str, cfg:
     session = boto3.Session(profile_name=args.profile, region_name=args.region)
     stack = resolve_stack(session.client("cloudformation"), args.stack_name)
     # total_max_attempts=1: a slow tick must never be silently invoked twice.
-    lam = session.client("lambda", config=Config(read_timeout=125, retries={"total_max_attempts": 1}))
+    lam = session.client("lambda", config=Config(read_timeout=125, connect_timeout=10, tcp_keepalive=True, retries={"total_max_attempts": 1}))
     sqs, ddb = session.client("sqs"), session.client("dynamodb")
     post = http_post(f"{stack.api_url}/classify")
 
@@ -594,10 +622,7 @@ def live_run(args: argparse.Namespace, schedule: pd.DataFrame, run_id: str, cfg:
     result = runner.run()
 
     logger.info("sending finished (aborted=%s); waiting for the queues to drain", result.aborted)
-    drained = wait_for_drain(sqs, stack.queue_urls)
-    if not drained:
-        logger.error("queues did not drain within %d s; exporting what exists", DRAIN_TIMEOUT_S)
-    export_counts = export_tables(ddb, stack.tables, run_id, LIVE_DIR)
+    drained = False
     meta = {
         "run_id": run_id, "policy": args.policy, "sizing": args.sizing, "time_scale": args.time_scale,
         "minutes": args.minutes, "start_minute": args.start_minute, "base_rate_per_min": cfg.base_rate_per_min,
@@ -605,10 +630,20 @@ def live_run(args: argparse.Namespace, schedule: pd.DataFrame, run_id: str, cfg:
         "t0_epoch": result.t0_epoch, "n_scheduled": len(schedule), "stack": args.stack_name,
         "max_retries": args.max_retries, "workers": args.workers,
     }
-    write_driver_files(result, run_id, LIVE_DIR, meta)
+    write_driver_files(result, run_id, LIVE_DIR, {**meta, "drained": False})  # saved before any further AWS call
+    drained = wait_for_drain(sqs, stack.queue_urls)
+    if not drained:
+        logger.error("queues did not drain within %d s; exporting what exists", DRAIN_TIMEOUT_S)
+    export_counts = export_tables(ddb, stack.tables, run_id, LIVE_DIR)
+    write_driver_files(result, run_id, LIVE_DIR, {**meta, "drained": drained})
     summary = summarise(result, args.time_scale, export_counts)
     print(json.dumps({"run_id": run_id, **summary}, indent=2, default=str))
-    return 130 if result.aborted else (0 if drained else 2)
+    if result.aborted:
+        return 130
+    if summary["tick_failures"]:
+        logger.error("%d controller tick(s) failed: this run is INVALID", summary["tick_failures"])
+        return 3
+    return 0 if drained else 2
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

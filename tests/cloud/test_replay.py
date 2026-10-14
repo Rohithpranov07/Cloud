@@ -498,3 +498,48 @@ def test_dry_run_prints_the_schedule_and_touches_no_aws(
 def test_bad_arguments_are_rejected(argv: list[str]) -> None:
     with pytest.raises(SystemExit):
         replay.parse_args(argv)
+
+
+def test_undelivered_errors_are_retried_but_read_timeouts_are_not() -> None:
+    from botocore.exceptions import EndpointConnectionError, ReadTimeoutError
+
+    calls = {"n": 0}
+
+    def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise EndpointConnectionError(endpoint_url="https://x")
+        return "ok"
+
+    assert replay.call_undelivered_retry(flaky, sleep=lambda s: None) == "ok" and calls["n"] == 3
+
+    def timed_out() -> None:
+        calls["n"] += 1
+        raise ReadTimeoutError(endpoint_url="https://x")
+
+    calls["n"] = 0
+    with pytest.raises(ReadTimeoutError):
+        replay.call_undelivered_retry(timed_out, sleep=lambda s: None)
+    assert calls["n"] == 1  # never run twice
+
+    def always_down() -> None:
+        raise EndpointConnectionError(endpoint_url="https://x")
+
+    with pytest.raises(EndpointConnectionError):
+        replay.call_undelivered_retry(always_down, attempts=3, sleep=lambda s: None)
+
+
+def test_drain_survives_transient_connection_errors() -> None:
+    from botocore.exceptions import EndpointConnectionError
+
+    class Sqs:
+        n = 0
+
+        def get_queue_attributes(self, **_: Any) -> dict:
+            Sqs.n += 1
+            if Sqs.n <= 2:
+                raise EndpointConnectionError(endpoint_url="https://sqs")
+            return {"Attributes": {"ApproximateNumberOfMessages": "0", "ApproximateNumberOfMessagesNotVisible": "0",
+                                   "ApproximateNumberOfMessagesDelayed": "0"}}
+
+    assert replay.wait_for_drain(Sqs(), {"p": "q"}, sleep=lambda s: None, poll_s=0, stable_polls=2) is True
