@@ -494,3 +494,10 @@ setting had not wound down, so they under-state or mis-state the lag. Rep 1 alon
 Rule: K = largest of {1,2,3,4,6} with p95 lag < 0.25*60/K (15 / 7.5 / 5 / 3.75 / 2.5 s).
 p95 = 19.9 s >= 15 s, so **no K qualifies; chosen_time_scale = null (exit 2)**. K is NOT chosen.
 Live runs are on hold pending a human decision.
+
+### Decision (human, 2026-10-14): proceed at K=1 as a documented deviation
+Calibration found no K meeting the actuation-lag rule (p95 19.9 s vs 15 s at K=1). The human chose to run
+all live runs at K=1 (real time), base rate 25, with the rule and thresholds unchanged. The unmet
+criterion and the measured 15-20 s actuation lag are to be reported as a divergence source. Frozen (H1):
+K=1, base rate 25, budget 24.0. Run order A-B-B-A: (baseline,ceil), (aware,ceil), (aware,round), (baseline,round).
+Automatic stops: any lost request, month-to-date spend > $1, or an aborted run.
