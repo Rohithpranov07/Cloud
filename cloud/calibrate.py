@@ -47,6 +47,7 @@ ROUTER_PROBES = 20
 ROUTER_PROBE_SERVICE_S = 2.0
 ROUTER_PROBE_GAP_S = 10.0
 CALIBRATION_PATH = replay.LIVE_DIR / "calibration.json"
+PARTIAL_PATH = replay.LIVE_DIR / "calibration_partial.json"
 
 
 # --------------------------------------------------------------------------------
@@ -204,6 +205,20 @@ def wait_until_enabled(lam: Any, mapping_uuid: str, expected: int, *, timeout_s:
     raise TimeoutError(f"mapping {mapping_uuid} did not reach Enabled/{expected} within {timeout_s:.0f}s")
 
 
+def restore_low_concurrency(lam: Any, mapping_uuid: str, *, attempts: int = 5,
+                            sleep: Callable[[float], None] = time.sleep) -> None:
+    """Put the pool back to LOW_CONCURRENCY. Retried (each failure logged); raises if every attempt fails."""
+    for attempt in range(1, attempts + 1):
+        try:
+            lam.update_event_source_mapping(UUID=mapping_uuid, ScalingConfig={"MaximumConcurrency": LOW_CONCURRENCY})
+            return
+        except Exception as exc:  # noqa: BLE001 - logged, re-raised after the last attempt
+            logger.error("restore attempt %d/%d failed: %s", attempt, attempts, type(exc).__name__)
+            if attempt == attempts:
+                raise
+            sleep(5.0 * attempt)
+
+
 def result_intervals(items: Sequence[Mapping[str, Any]]) -> list[tuple[float, float]]:
     return [(float(i["start_ts"]), float(i["end_ts"])) for i in items]
 
@@ -356,8 +371,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rep=rep, sqs=sqs, lam=lam, ddb=ddb, queue_url=stack.queue_urls[ACTUATION_POOL],
                 mapping_uuid=mapping_uuid, results_table=stack.tables["results"],
             ))
+            replay.LIVE_DIR.mkdir(parents=True, exist_ok=True)  # keep every finished rep even if a later call fails
+            PARTIAL_PATH.write_text(json.dumps({"actuation": actuation, "probes": probes}, indent=2, default=str))
     finally:  # never leave the pool raised
-        lam.update_event_source_mapping(UUID=mapping_uuid, ScalingConfig={"MaximumConcurrency": LOW_CONCURRENCY})
+        restore_low_concurrency(lam, mapping_uuid)
 
     durations = read_router_durations(logs, started)
     report = calibration_report(actuation, probes["rows"], durations, skew)

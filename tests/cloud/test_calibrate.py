@@ -260,3 +260,21 @@ def test_wait_until_enabled_retries_transient_timeouts_but_not_forever() -> None
     calibrate.wait_until_enabled(Flaky(2), "u", 2, sleep=lambda s: None)  # recovers after two timeouts
     with pytest.raises(ReadTimeoutError):
         calibrate.wait_until_enabled(Flaky(10), "u", 2, sleep=lambda s: None)  # gives up visibly
+
+
+def test_restore_retries_then_raises() -> None:
+    class Lam:
+        def __init__(self, failures: int) -> None:
+            self.failures, self.calls = failures, 0
+
+        def update_event_source_mapping(self, UUID: str, ScalingConfig: dict) -> dict:
+            self.calls += 1
+            if self.calls <= self.failures:
+                raise OSError(49, "Can't assign requested address")
+            return {}
+
+    ok = Lam(2)
+    calibrate.restore_low_concurrency(ok, "u", sleep=lambda s: None)
+    assert ok.calls == 3
+    with pytest.raises(OSError):
+        calibrate.restore_low_concurrency(Lam(99), "u", attempts=3, sleep=lambda s: None)
