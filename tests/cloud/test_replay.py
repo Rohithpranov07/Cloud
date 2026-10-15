@@ -553,3 +553,17 @@ def test_abort_on_tick_failure_stops_the_run(full_schedule: pd.DataFrame) -> Non
     runner.abort_on_tick_failure = True
     result = runner.run()
     assert result.aborted and len(result.ticks) == 1
+
+
+def test_every_tick_gets_a_fresh_lambda_client() -> None:
+    created: list[object] = []
+
+    class Session:
+        def client(self, name: str, config: Any = None) -> object:
+            created.append(object())
+            assert name == "lambda" and config.retries["total_max_attempts"] == 1
+            return created[-1]
+
+    session = Session()
+    assert replay.fresh_lambda_client(session) is not replay.fresh_lambda_client(session)
+    assert len(created) == 2

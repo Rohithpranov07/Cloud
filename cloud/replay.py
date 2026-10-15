@@ -397,6 +397,17 @@ def call_undelivered_retry(
             sleep(min(max_wait_s, base_s * attempt))
 
 
+def fresh_lambda_client(session: Any) -> Any:
+    """A new Lambda client (hence a new connection pool). total_max_attempts=1: a slow tick must never be
+    silently invoked twice. A fresh client per tick avoids reusing a keep-alive connection that went stale
+    during the idle minutes before the first tick (observed: ConnectionResetError on tick 10)."""
+    from botocore.config import Config
+
+    return session.client(
+        "lambda", config=Config(read_timeout=125, connect_timeout=10, tcp_keepalive=True, retries={"total_max_attempts": 1})
+    )
+
+
 def invoke_controller(lam: Any, function_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Synchronous (RequestResponse) invoke; returns the function's JSON plus StatusCode/FunctionError."""
     response = call_undelivered_retry(lambda: lam.invoke(
@@ -616,7 +627,7 @@ def live_run(args: argparse.Namespace, schedule: pd.DataFrame, run_id: str, cfg:
 
     def tick(minute: int) -> dict[str, Any]:
         return invoke_controller(
-            lam, stack.controller,
+            fresh_lambda_client(session), stack.controller,
             {"run_id": run_id, "policy": args.policy, "sizing": args.sizing, "minute": minute},
         )
 
