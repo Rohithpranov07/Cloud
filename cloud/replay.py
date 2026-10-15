@@ -214,6 +214,7 @@ class Runner:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         tick_wait_cap_s: float = TICK_WAIT_CAP_S,
+        abort_on_tick_failure: bool = False,
     ) -> None:
         self.schedule = schedule
         self.run_id, self.policy = run_id, policy
@@ -221,6 +222,7 @@ class Runner:
         self.post, self.tick = post, tick
         self.workers, self.max_retries, self.retry_backoff_s = workers, max_retries, retry_backoff_s
         self.clock, self.sleep, self.tick_wait_cap_s = clock, sleep, tick_wait_cap_s
+        self.abort_on_tick_failure = abort_on_tick_failure
 
         self.abort = threading.Event()
         self._lock = threading.Lock()
@@ -305,6 +307,9 @@ class Runner:
             except Exception as exc:  # the tick must never kill the run; the failure is recorded loudly
                 logger.exception("tick %d failed", minute)
                 status, function_error, changes = 0, f"{type(exc).__name__}: {exc}", "{}"
+                if self.abort_on_tick_failure:  # a run with a missed decision is invalid: stop wasting wall time
+                    logger.error("tick %d failed after retries: aborting the run", minute)
+                    self.abort.set()
             ticks.append(TickRecord(
                 minute=minute, planned_s=due, actual_s=started - self._t0, latency_s=self.clock() - started,
                 status=status, function_error=function_error, changes=changes, outstanding_sends=outstanding,
@@ -618,6 +623,7 @@ def live_run(args: argparse.Namespace, schedule: pd.DataFrame, run_id: str, cfg:
     runner = Runner(
         schedule, run_id=run_id, policy=args.policy, time_scale=args.time_scale, minutes=args.minutes,
         start_minute=args.start_minute, post=post, tick=tick, workers=args.workers, max_retries=args.max_retries,
+        abort_on_tick_failure=True,
     )
     result = runner.run()
 

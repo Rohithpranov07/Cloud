@@ -543,3 +543,13 @@ def test_drain_survives_transient_connection_errors() -> None:
                                    "ApproximateNumberOfMessagesDelayed": "0"}}
 
     assert replay.wait_for_drain(Sqs(), {"p": "q"}, sleep=lambda s: None, poll_s=0, stable_polls=2) is True
+
+
+def test_abort_on_tick_failure_stops_the_run(full_schedule: pd.DataFrame) -> None:
+    def tick(minute: int) -> dict:
+        raise RuntimeError("network down")
+
+    runner = _small_runner(full_schedule, lambda b: (202, ""), tick)
+    runner.abort_on_tick_failure = True
+    result = runner.run()
+    assert result.aborted and len(result.ticks) == 1
