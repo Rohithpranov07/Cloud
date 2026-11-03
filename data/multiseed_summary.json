@@ -1,0 +1,72 @@
+{
+  "round": {
+    "sla_violation_rate": {
+      "n": 30,
+      "median_baseline": 1.0,
+      "median_aware": 0.3173017236990961,
+      "median_paired_diff": -0.682698276300904,
+      "ci_low": -0.7546706885852518,
+      "ci_high": -0.6223725462394052,
+      "statistic": 0.0,
+      "p_value": 1.862645149230957e-09,
+      "rank_biserial_r": -1.0
+    },
+    "p95_response_s": {
+      "n": 30,
+      "median_baseline": 2098.126425376662,
+      "median_aware": 91.22732613597759,
+      "median_paired_diff": -2011.0060409598018,
+      "ci_low": -2490.7522016594244,
+      "ci_high": -1376.443999541535,
+      "statistic": 0.0,
+      "p_value": 1.862645149230957e-09,
+      "rank_biserial_r": -1.0
+    },
+    "cost_per_compliant_request": {
+      "n": 0,
+      "median_baseline": NaN,
+      "median_aware": NaN,
+      "median_paired_diff": NaN,
+      "ci_low": NaN,
+      "ci_high": NaN,
+      "statistic": NaN,
+      "p_value": NaN,
+      "rank_biserial_r": NaN
+    }
+  },
+  "ceil": {
+    "sla_violation_rate": {
+      "n": 30,
+      "median_baseline": 1.0,
+      "median_aware": 0.01772017662875504,
+      "median_paired_diff": -0.9793922790205696,
+      "ci_low": -0.9838108645735569,
+      "ci_high": -0.9746129295944024,
+      "statistic": 0.0,
+      "p_value": 1.862645149230957e-09,
+      "rank_biserial_r": -1.0
+    },
+    "p95_response_s": {
+      "n": 30,
+      "median_baseline": 737.8668024052823,
+      "median_aware": 26.60970330066384,
+      "median_paired_diff": -712.6106175592221,
+      "ci_low": -741.3243328458618,
+      "ci_high": -674.1383773683228,
+      "statistic": 0.0,
+      "p_value": 1.862645149230957e-09,
+      "rank_biserial_r": -1.0
+    },
+    "cost_per_compliant_request": {
+      "n": 10,
+      "median_baseline": 0.4790625000000025,
+      "median_aware": 0.006627285050736649,
+      "median_paired_diff": -0.4725520337961987,
+      "ci_low": -3.6068724958578287,
+      "ci_high": -0.3390553560371535,
+      "statistic": 0.0,
+      "p_value": 0.001953125,
+      "rank_biserial_r": -1.0
+    }
+  }
+}

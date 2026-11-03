@@ -10,6 +10,18 @@ data/*.csv
 data/*.png
 data/*.json
 !data/.gitkeep
+!data/evaluation_results.csv
+!data/multiseed_results.csv
+!data/multiseed_results_rate25.csv
+!data/sensitivity.csv
+!data/latency_per_request_aware_ceil.csv
+!data/latency_per_request_aware_round.csv
+!data/latency_per_request_baseline_ceil.csv
+!data/latency_per_request_baseline_round.csv
+!data/trace.csv
+!data/trace_labeled.csv
+!data/latency_summary.json
+!data/multiseed_summary.json
 !tests/golden/evaluation_results_round.csv
 
 # SAM CLI build output (sam build); never committed.
