@@ -1,6 +1,6 @@
 {
-  "rewrites": [
-    { "source": "/", "destination": "/api" },
-    { "source": "/:path*", "destination": "/api/:path*" }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite"
 }
