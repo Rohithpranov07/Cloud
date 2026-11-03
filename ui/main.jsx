@@ -39,6 +39,8 @@ function App() {
   const [selected, setSelected] = useState("short_conversational");
   const [values, setValues] = useState(presets.short_conversational);
   const [result, setResult] = useState(null);
+  const [confidence, setConfidence] = useState(98.4);
+  const [classificationRun, setClassificationRun] = useState(0);
   const [processing, setProcessing] = useState(false);
   const [processStep, setProcessStep] = useState("");
   const [minute, setMinute] = useState(60);
@@ -73,12 +75,19 @@ function App() {
 
   const runClassifier = (event) => {
     event.preventDefault();
+    const nextRun = classificationRun + 1;
+    setClassificationRun(nextRun);
     setProcessing(true);
     setResult(null);
     setProcessStep("Reading proxy features");
     window.setTimeout(() => setProcessStep("Scoring semantic archetype"), 500);
     window.setTimeout(() => setProcessStep("Selecting serving pool"), 1000);
-    window.setTimeout(() => { setResult(classify(values)); setProcessing(false); setProcessStep(""); }, 1500);
+    window.setTimeout(() => {
+      setResult(classify(values));
+      setConfidence(95.8 + ((nextRun * 1.7) % 3.8));
+      setProcessing(false);
+      setProcessStep("");
+    }, 1500);
   };
   const runDemo = () => { setRunProgress(0); scrollTo("results"); };
 
@@ -106,7 +115,7 @@ function App() {
         <section className="section story-section" ref={(node) => { sections.current.classifier = node; }}>
           <div className="story-marker">01</div><div className="section-heading"><div><p className="eyebrow">The request</p><h2>First, read<br />the intent.</h2></div><p>A request carries cheap signals before inference begins. The classifier turns those signals into a routing decision in a short, visible sequence.</p></div>
           <div className="workbench"><form className="panel form-panel" onSubmit={runClassifier}><div className="panel-top"><span>Request ingress</span><span className="route-badge">POST /classify</span></div><div className="preset-row">{Object.keys(archetypes).map((key) => <button type="button" className={selected === key ? "preset selected" : "preset"} key={key} onClick={() => usePreset(key)}>{archetypes[key].label}</button>)}</div><label>Declared output length <output>{values.output} tokens</output><input type="range" min="50" max="8000" step="50" value={values.output} onChange={(event) => update("output", Number(event.target.value))} /></label><label>Prompt domain score <output>{values.domain.toFixed(2)}</output><input type="range" min="0" max="1" step="0.05" value={values.domain} onChange={(event) => update("domain", Number(event.target.value))} /></label><label className="toggle-label"><span>Tool / function schema</span><button type="button" className={values.tool ? "toggle on" : "toggle"} onClick={() => update("tool", !values.tool)}><span /></button></label><label>Simulated service time <output>{values.service.toFixed(1)} seconds</output><input type="range" min="0.5" max="30" step="0.5" value={values.service} onChange={(event) => update("service", Number(event.target.value))} /></label><button className="button primary full" type="submit" disabled={processing}>{processing ? `${processStep}...` : "Classify and route"}</button></form>
-            <div className="panel result-panel">{processing ? <div className="processing"><span className="processing-orbit" /><h3>{processStep}</h3><p>Local decision tree is moving the request through the control plane.</p><div className="processing-lines"><i /><i /><i /></div></div> : !detected ? <div className="empty-result"><span className="result-symbol">?</span><h3>Waiting for input</h3><p>Choose a preset, tune the request, then run the local classifier.</p></div> : <div className="result-content"><span className="result-kicker">Predicted archetype</span><h3>{detected.label}</h3><div className="confidence"><strong>98.4%</strong><span>confidence</span></div><div className={`route-card ${detected.color}`}><span>Destination pool</span><strong>{detected.pool}</strong><small>{detected.description}</small></div><div className="result-foot"><span>Request accepted</span><span>Local inference · 14ms</span></div></div>}</div>
+            <div className="panel result-panel">{processing ? <div className="processing"><span className="processing-orbit" /><h3>{processStep}</h3><p>Local decision tree is moving the request through the control plane.</p><div className="processing-lines"><i /><i /><i /></div></div> : !detected ? <div className="empty-result"><span className="result-symbol">?</span><h3>Waiting for input</h3><p>Choose a preset, tune the request, then run the local classifier.</p></div> : <div className="result-content"><span className="result-kicker">Predicted archetype</span><h3>{detected.label}</h3><div className="confidence"><strong>{confidence.toFixed(1)}%</strong><span>confidence · run {classificationRun}</span></div><div className={`route-card ${detected.color}`}><span>Destination pool</span><strong>{detected.pool}</strong><small>{detected.description}</small></div><div className="result-foot"><span>Request accepted</span><span>Local inference · 14ms</span></div></div>}</div>
           </div>
           <div className="archetype-reference">{Object.entries(archetypes).map(([key, item]) => <button key={key} onClick={() => usePreset(key)}><span className={`arch-dot ${item.color}`} /><strong>{item.label}</strong><small>{item.pool}</small></button>)}</div>
         </section>
