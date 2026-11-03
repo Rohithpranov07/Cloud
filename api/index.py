@@ -116,12 +116,20 @@ def dashboard() -> FileResponse:
 
 
 @app.get("/{asset_path:path}")
-def frontend_asset(asset_path: str) -> Response:
+def frontend_asset(request: Request, asset_path: str) -> Response:
     """Serve the static dashboard files when Vercel routes through FastAPI."""
-    if asset_path.startswith("api/"):
-        return JSONResponse({"error": "Not found"}, status_code=404)
+    path = request.url.path.rstrip("/")
+    if path.endswith("/status"):
+        return JSONResponse(status())
+    if path.endswith("/trace"):
+        return JSONResponse(trace())
+    if path.endswith("/live-summary"):
+        return JSONResponse(live_summary())
+    if path in ("", "/") or path.endswith("/api"):
+        return FileResponse(ROOT_DIR / "web" / "index.html")
 
-    requested = (ROOT_DIR / "web" / asset_path).resolve()
+    filename = path.rsplit("/", 1)[-1]
+    requested = (ROOT_DIR / "web" / filename).resolve()
     web_root = (ROOT_DIR / "web").resolve()
     if requested.is_relative_to(web_root) and requested.is_file():
         return FileResponse(requested)
