@@ -41,6 +41,7 @@ def _trace_data() -> dict[str, Any]:
 
 
 @app.get("/api/status")
+@app.get("/status")
 def status() -> dict[str, Any]:
     region = "ap-south-1"
     return {
@@ -57,16 +58,19 @@ def status() -> dict[str, Any]:
 
 
 @app.get("/api/trace")
+@app.get("/trace")
 def trace() -> dict[str, Any]:
     return _trace_data()
 
 
 @app.get("/api/live-summary")
+@app.get("/live-summary")
 def live_summary() -> dict[str, Any]:
     return _json_file(ROOT_DIR / "web" / "live-summary.json", {"runs": []})
 
 
 @app.post("/api/classify")
+@app.post("/classify")
 async def classify(request: Request) -> JSONResponse:
     try:
         payload = await request.json()
@@ -93,6 +97,7 @@ async def classify(request: Request) -> JSONResponse:
 
 
 @app.post("/api/run-demo")
+@app.post("/run-demo")
 def run_demo() -> JSONResponse:
     return JSONResponse(
         {
