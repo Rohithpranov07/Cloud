@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 app = FastAPI()
 
@@ -103,3 +103,21 @@ def run_demo() -> JSONResponse:
         },
         status_code=501,
     )
+
+
+@app.get("/")
+def dashboard() -> FileResponse:
+    return FileResponse(ROOT_DIR / "web" / "index.html")
+
+
+@app.get("/{asset_path:path}")
+def frontend_asset(asset_path: str) -> FileResponse | JSONResponse:
+    """Serve the static dashboard files when Vercel routes through FastAPI."""
+    if asset_path.startswith("api/"):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    requested = (ROOT_DIR / "web" / asset_path).resolve()
+    web_root = (ROOT_DIR / "web").resolve()
+    if requested.is_relative_to(web_root) and requested.is_file():
+        return FileResponse(requested)
+    return JSONResponse({"error": "Not found"}, status_code=404)
