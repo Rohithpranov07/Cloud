@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Semantic Autoscaling Control Plane — Live AWS Dashboard</title>
+  <meta name="description" content="Live monitoring and interactive evaluation dashboard for Semantic Workload-Composition-Aware Predictive Cloud Autoscaling on AWS.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header" id="app-header">
+      <div class="header-branding">
+        <div class="logo-badge">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="header-title">Semantic Autoscaling</h1>
+          <p class="header-subtitle">Workload-Composition-Aware Predictive Control Plane on AWS</p>
+        </div>
+      </div>
+
+      <div class="header-meta">
+        <div class="status-indicator-pill online" id="aws-status-pill">
+          <span class="status-dot"></span>
+          <span id="aws-status-text">AWS ap-south-1 (Live)</span>
+        </div>
+        <div class="meta-stat">
+          <span class="meta-label">Budget Guardrail</span>
+          <span class="meta-val" id="budget-status">$0.00 / $5.00</span>
+        </div>
+        <a id="cloudwatch-link" href="https://ap-south-1.console.aws.amazon.com/cloudwatch/home?region=ap-south-1#dashboards/dashboard/semauto-live" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>
+          </svg>
+          AWS Console
+        </a>
+        <button id="btn-run-live-demo" class="btn btn-primary btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Run Live Demo
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs" id="main-nav-tabs">
+      <button class="nav-tab active" data-tab="tab-playground" id="tab-btn-playground">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        Interactive Classifier & Router
+      </button>
+      <button class="nav-tab" data-tab="tab-simulation" id="tab-btn-simulation">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Trace Shift & Capacity Simulation
+      </button>
+      <button class="nav-tab" data-tab="tab-benchmarks" id="tab-btn-benchmarks">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Live AWS Experimental Results
+      </button>
+      <button class="nav-tab" data-tab="tab-architecture" id="tab-btn-architecture">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        Architecture Topology
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+
+      <!-- TAB 1: Interactive Classifier & Routing Playground -->
+      <section class="tab-pane active" id="tab-playground">
+        <div class="grid-2-col">
+          <!-- Left: Input Controls -->
+          <div class="card glass-panel" id="panel-ingress-input">
+            <div class="card-header">
+              <h2 class="card-title">Pre-Inference Request Ingress</h2>
+              <span class="badge badge-accent">POST /classify</span>
+            </div>
+            <p class="card-desc">
+              Test how incoming requests are classified from cheap proxy features <em>before</em> heavy inference execution, routing them to tailored AWS serving pools.
+            </p>
+
+            <div class="preset-buttons">
+              <span class="preset-label">Quick Archetype Presets:</span>
+              <div class="button-group">
+                <button type="button" class="btn btn-chip active" data-preset="short_conversational" id="preset-short">Short Chat</button>
+                <button type="button" class="btn btn-chip" data-preset="long_context_rag" id="preset-rag">Long RAG</button>
+                <button type="button" class="btn btn-chip" data-preset="agentic_tool_using" id="preset-agentic">Agentic Tool</button>
+                <button type="button" class="btn btn-chip" data-preset="batch_offline" id="preset-batch">Batch Offline</button>
+              </div>
+            </div>
+
+            <form id="form-classify" class="form-grid">
+              <div class="form-group">
+                <div class="label-with-val">
+                  <label for="input-output-len">Declared Output Length</label>
+                  <span class="range-val" id="val-output-len">120 tokens</span>
+                </div>
+                <input type="range" id="input-output-len" min="50" max="8000" step="50" value="120" class="slider">
+              </div>
+
+              <div class="form-group">
+                <div class="label-with-val">
+                  <label for="input-domain-score">Prompt Domain Score</label>
+                  <span class="range-val" id="val-domain-score">0.10</span>
+                </div>
+                <input type="range" id="input-domain-score" min="0" max="1" step="0.05" value="0.10" class="slider">
+              </div>
+
+              <div class="form-group-row">
+                <div>
+                  <label class="toggle-label" for="input-has-tool">Has Tool / Function Schema</label>
+                  <span class="help-text">Presence of OpenAPI / JSON schema definitions</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="input-has-tool">
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+
+              <div class="form-group">
+                <label for="input-sim-service">Simulated Service Time (Seconds)</label>
+                <input type="number" id="input-sim-service" min="0.5" max="30" step="0.5" value="2.0" class="text-input">
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-block" id="btn-send-request">
+                  <span class="btn-spinner" id="btn-spinner" style="display:none;"></span>
+                  Send Request to API Gateway
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Right: Visual Routing Output -->
+          <div class="card glass-panel" id="panel-ingress-output">
+            <div class="card-header">
+              <h2 class="card-title">Live Classification & Dynamic Routing</h2>
+              <span class="badge" id="badge-response-status">Waiting for input</span>
+            </div>
+
+            <div class="classification-result-card" id="result-display-box">
+              <div class="result-metric-grid">
+                <div class="res-stat">
+                  <span class="res-label">Predicted Archetype</span>
+                  <span class="res-value highlight" id="res-archetype">short_conversational</span>
+                </div>
+                <div class="res-stat">
+                  <span class="res-label">Classifier Confidence</span>
+                  <span class="res-value" id="res-confidence">100.0%</span>
+                </div>
+                <div class="res-stat">
+                  <span class="res-label">API Gateway RTT</span>
+                  <span class="res-value" id="res-rtt">0.24s</span>
+                </div>
+              </div>
+
+              <div class="routing-visualizer">
+                <div class="routing-path">
+                  <div class="routing-node active">
+                    <div class="node-icon">API</div>
+                    <span>HTTP Ingress</span>
+                  </div>
+                  <div class="routing-arrow active"></div>
+                  <div class="routing-node active">
+                    <div class="node-icon">ML</div>
+                    <span>Classifier</span>
+                  </div>
+                  <div class="routing-arrow active"></div>
+                  <div class="routing-node destination" id="node-dest-pool">
+                    <div class="node-icon" id="dest-pool-icon">SQS</div>
+                    <span id="dest-pool-name">bedrock_on_demand</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="target-pool-info" id="pool-info-card">
+                <div class="pool-header">
+                  <span class="pool-tag" id="pool-tag-primitive">AWS Bedrock On-Demand</span>
+                  <span class="pool-concurrency">Base Service: 4.0s</span>
+                </div>
+                <p class="pool-desc" id="pool-desc-text">
+                  Tailored for interactive, low-latency conversational queries with high elasticity and zero idle cost.
+                </p>
+              </div>
+            </div>
+
+            <!-- Archetype Reference Grid -->
+            <div class="archetype-cards-grid">
+              <div class="arch-card" id="arch-card-short">
+                <span class="arch-dot dot-short"></span>
+                <span class="arch-name">Short Conversational</span>
+                <span class="arch-pool">Bedrock</span>
+              </div>
+              <div class="arch-card" id="arch-card-rag">
+                <span class="arch-dot dot-rag"></span>
+                <span class="arch-name">Long-Context RAG</span>
+                <span class="arch-pool">SageMaker</span>
+              </div>
+              <div class="arch-card" id="arch-card-agentic">
+                <span class="arch-dot dot-agentic"></span>
+                <span class="arch-name">Agentic Tool-Using</span>
+                <span class="arch-pool">EKS Reserved</span>
+              </div>
+              <div class="arch-card" id="arch-card-batch">
+                <span class="arch-dot dot-batch"></span>
+                <span class="arch-name">Batch Offline</span>
+                <span class="arch-pool">EKS Spot</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: Simulation Scrubber & Comparison Charts -->
+      <section class="tab-pane" id="tab-simulation">
+        <!-- Interactive Scrubber Controls -->
+        <div class="card glass-panel timeline-scrubber-card" id="panel-scrubber">
+          <div class="scrubber-header">
+            <div>
+              <h2 class="card-title">120-Minute Trace Timeline Scrubber</h2>
+              <span class="help-text">Shift occurs from Minute 60–75 (Constant ~50 req/min, Agentic share surges from 10% to 40%)</span>
+            </div>
+            <div class="scrubber-controls">
+              <button class="btn btn-secondary btn-icon" id="btn-play-pause">
+                <svg id="icon-play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <svg id="icon-pause" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                <span id="play-pause-label">Play Trace</span>
+              </button>
+              <button class="btn btn-secondary btn-sm" id="btn-reset-timeline">Reset</button>
+              <div class="minute-badge">Minute <span id="current-minute-val">60</span> / 120</div>
+            </div>
+          </div>
+          <input type="range" id="timeline-slider" min="0" max="119" value="60" class="slider timeline-slider">
+          <div class="timeline-annotations">
+            <span>Min 0 (Baseline start)</span>
+            <span class="annotation-shift">Shift Window: Min 60–75</span>
+            <span>Min 120 (End)</span>
+          </div>
+        </div>
+
+        <!-- Metric Stat Cards at Current Minute -->
+        <div class="stats-row" id="stats-current-minute">
+          <div class="stat-card">
+            <span class="stat-label">Aggregate Volume</span>
+            <span class="stat-val" id="stat-agg-rate">49.8 req/min</span>
+            <span class="stat-sub">Volume stays invariant</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Agentic Share</span>
+            <span class="stat-val highlight" id="stat-agentic-share">39.1%</span>
+            <span class="stat-sub" id="stat-agentic-sub">+29% shift from 10%</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Aware Capacity Total</span>
+            <span class="stat-val stat-aware" id="stat-aware-cap">5.0 units</span>
+            <span class="stat-sub" id="stat-aware-cap-sub">EKS Reserved: 2 units</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Baseline Capacity</span>
+            <span class="stat-val stat-baseline" id="stat-base-cap">2.0 units</span>
+            <span class="stat-sub">Starved (Agnostic to shift)</span>
+          </div>
+        </div>
+
+        <!-- Visual Charts Grid -->
+        <div class="grid-2-col charts-grid">
+          <!-- Chart 1: Demand Forecast -->
+          <div class="card glass-panel chart-box">
+            <div class="card-header">
+              <h3 class="card-title">Forecast Divergence (Agentic vs Aggregate)</h3>
+              <span class="badge badge-accent">Star Base Paper Blindness</span>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="chart-forecast"></canvas>
+            </div>
+            <p class="chart-caption">
+              The aggregate forecast stays flat (within ±1.3%), completely missing the compositional shift. The per-archetype forecaster detects the agentic ramp at minute 67.
+            </p>
+          </div>
+
+          <!-- Chart 2: Capacity Allocation -->
+          <div class="card glass-panel chart-box">
+            <div class="card-header">
+              <h3 class="card-title">Capacity Actuation (Aware vs Baseline)</h3>
+              <span class="badge">EKS GPU Concurrency</span>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="chart-capacity"></canvas>
+            </div>
+            <p class="chart-caption">
+              The archetype-aware controller scales the exact primitive needed (EKS GPU reserved 1 $\rightarrow$ 2 units) while baseline capacity remains starved.
+            </p>
+          </div>
+
+          <!-- Chart 3: Cost Governance & Budget -->
+          <div class="card glass-panel chart-box">
+            <div class="card-header">
+              <h3 class="card-title">Cost Governance & Budget Projection</h3>
+              <span class="badge badge-warning">Early Breach Detection</span>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="chart-budget"></canvas>
+            </div>
+            <p class="chart-caption">
+              Aware controller detects projected budget breach at <strong>minute 71</strong> (lead time: 37 minutes). Baseline does not discover it until minute 108.
+            </p>
+          </div>
+
+          <!-- Chart 4: Queueing Latency & SLA Violations -->
+          <div class="card glass-panel chart-box">
+            <div class="card-header">
+              <h3 class="card-title">Simulated vs Live Latency Impact</h3>
+              <span class="badge badge-danger">SLA Protection</span>
+            </div>
+            <div class="chart-wrapper">
+              <canvas id="chart-latency"></canvas>
+            </div>
+            <p class="chart-caption">
+              Baseline suffers catastrophic head-of-line blocking in the homogeneous queue, with SLA violations exceeding 99% post-shift.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: Live AWS Experimental Benchmarks -->
+      <section class="tab-pane" id="tab-benchmarks">
+        <div class="card glass-panel">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Real AWS Infrastructure Benchmarks (2,933 Requests / Run)</h2>
+              <span class="help-text">Measured on live AWS serverless stack (HTTP API + SQS + Lambda Concurrency Slots)</span>
+            </div>
+            <span class="badge badge-success">4 Live Runs Verified</span>
+          </div>
+
+          <div class="table-responsive">
+            <table class="benchmark-table" id="table-benchmarks">
+              <thead>
+                <tr>
+                  <th>Policy</th>
+                  <th>Sizing Rule</th>
+                  <th>Requests Sent</th>
+                  <th>Completed Results</th>
+                  <th>Live p95 Latency</th>
+                  <th>Live SLA Violation Rate</th>
+                  <th>Sim SLA Violation Rate</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="benchmark-tbody">
+                <tr>
+                  <td><span class="badge-policy aware">Aware</span></td>
+                  <td><code>ceil</code></td>
+                  <td>2,933</td>
+                  <td>2,933</td>
+                  <td><strong>49.0s</strong></td>
+                  <td><span class="sla-pill good">9.5%</span></td>
+                  <td>0.9%</td>
+                  <td><span class="status-tag success">Verified</span></td>
+                </tr>
+                <tr>
+                  <td><span class="badge-policy aware">Aware</span></td>
+                  <td><code>round</code></td>
+                  <td>2,933</td>
+                  <td>2,933</td>
+                  <td><strong>311.7s</strong></td>
+                  <td><span class="sla-pill warn">20.0%</span></td>
+                  <td>10.7%</td>
+                  <td><span class="status-tag success">Verified</span></td>
+                </tr>
+                <tr>
+                  <td><span class="badge-policy baseline">Baseline</span></td>
+                  <td><code>ceil</code></td>
+                  <td>2,933</td>
+                  <td>2,933</td>
+                  <td><strong>583.7s</strong></td>
+                  <td><span class="sla-pill bad">78.6%</span></td>
+                  <td>23.2%</td>
+                  <td><span class="status-tag success">Verified</span></td>
+                </tr>
+                <tr>
+                  <td><span class="badge-policy baseline">Baseline</span></td>
+                  <td><code>round</code></td>
+                  <td>2,933</td>
+                  <td>2,933</td>
+                  <td><strong>6,311.8s</strong></td>
+                  <td><span class="sla-pill bad">99.5%</span></td>
+                  <td>99.6%</td>
+                  <td><span class="status-tag success">Verified</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Physical AWS Latency Insights -->
+          <div class="card-sub-grid">
+            <div class="sub-card">
+              <h4>Real Actuation Lag</h4>
+              <p class="highlight-num">17.9s – 19.9s</p>
+              <p class="sub-card-desc">Time required for AWS Lambda EventSourceMapping concurrency adjustment to propagate across pool workers.</p>
+            </div>
+            <div class="sub-card">
+              <h4>SQS Polling Delay</h4>
+              <p class="highlight-num">0.02s – 0.04s</p>
+              <p class="sub-card-desc">Base queueing latency between SQS enqueue and worker invocation when a slot is immediately idle.</p>
+            </div>
+            <div class="sub-card">
+              <h4>Router Warm Duration</h4>
+              <p class="highlight-num">17.9ms</p>
+              <p class="sub-card-desc">Pre-inference decision tree classification execution time per request in Lambda ARM64.</p>
+            </div>
+            <div class="sub-card">
+              <h4>Statistical Significance</h4>
+              <p class="highlight-num">p = 1.9 &times; 10<sup>-9</sup></p>
+              <p class="sub-card-desc">Wilcoxon signed-rank paired test over 30 random seeds confirms aware policy superiority (r = -1.00).</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: System Architecture Topology -->
+      <section class="tab-pane" id="tab-architecture">
+        <div class="card glass-panel">
+          <div class="card-header">
+            <h2 class="card-title">Live AWS Control Plane Architecture</h2>
+            <span class="badge badge-accent">Serverless Micro-Architecture</span>
+          </div>
+
+          <div class="topology-diagram">
+            <div class="topology-column">
+              <div class="topo-box ingress-box">
+                <div class="topo-title">Client Ingress</div>
+                <div class="topo-desc">AI Inference Requests</div>
+                <div class="topo-meta">POST /classify</div>
+              </div>
+            </div>
+
+            <div class="topo-connector">&rarr;</div>
+
+            <div class="topology-column">
+              <div class="topo-box router-box">
+                <div class="topo-title">Router Lambda</div>
+                <div class="topo-desc">Pre-Inference Classifier</div>
+                <div class="topo-meta">Decision Tree (ARM64)</div>
+              </div>
+              <div class="topo-branch-down">&darr; Telemetry</div>
+              <div class="topo-box ddb-box">
+                <div class="topo-title">DynamoDB</div>
+                <div class="topo-desc">semauto-counts (Atomic)</div>
+              </div>
+            </div>
+
+            <div class="topo-connector">&rarr;</div>
+
+            <div class="topology-column">
+              <div class="topo-box queues-box">
+                <div class="topo-title">5 SQS Serving Queues</div>
+                <ul class="queue-list">
+                  <li>bedrock_on_demand</li>
+                  <li>sagemaker_endpoint</li>
+                  <li>eks_gpu_reserved</li>
+                  <li>eks_gpu_spot</li>
+                  <li>homogeneous_pool</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="topo-connector">&rarr;</div>
+
+            <div class="topology-column">
+              <div class="topo-box workers-box">
+                <div class="topo-title">5 Worker Lambdas</div>
+                <div class="topo-desc">Slot Concurrency Emulators</div>
+                <div class="topo-meta">MaximumConcurrency Actuation</div>
+              </div>
+              <div class="topo-branch-down">&darr; Latency Records</div>
+              <div class="topo-box ddb-box">
+                <div class="topo-title">DynamoDB</div>
+                <div class="topo-desc">semauto-results</div>
+              </div>
+            </div>
+
+            <div class="topo-connector">&larr;</div>
+
+            <div class="topology-column">
+              <div class="topo-box controller-box">
+                <div class="topo-title">Controller Lambda</div>
+                <div class="topo-desc">Per-Archetype Forecaster</div>
+                <div class="topo-meta">Updates Concurrency on ESM</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Live Demo Execution Modal -->
+    <div class="modal-backdrop" id="demo-modal" style="display:none;">
+      <div class="modal-card glass-panel">
+        <div class="modal-header">
+          <h3 class="modal-title">Live AWS Demo Console</h3>
+          <button class="btn-close" id="btn-close-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">Executing full end-to-end integration test against deployed stack in <code>ap-south-1</code>...</p>
+          <div class="terminal-window" id="demo-terminal-output">
+            <span class="term-line prompt">> python -m cloud.demo</span>
+            <span class="term-line loader" id="term-loader">Dispatching requests and querying DynamoDB...</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btn-modal-dismiss">Close</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

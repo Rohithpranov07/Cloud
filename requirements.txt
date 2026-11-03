@@ -9,6 +9,7 @@ scikit-learn==1.9.0
 statsmodels==0.14.6
 pytest==9.1.1
 PyYAML==6.0.3
+fastapi==0.117.1
 
 # Dev tooling required by the CLAUDE.md quality gates (`mypy src/` clean).
 # Formally added to the stack at T8.1; pinned here so the gate is runnable from T0.1 on.
